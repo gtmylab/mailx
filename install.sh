@@ -34,7 +34,8 @@ update_postfix_config() {
 
 # Function to install Roundcube
 install_roundcube() {
-    local domain=$1
+    local EMAIL_DOMAIN=$1
+    local HOSTNAME=$2
 
     # Update system and install necessary packages
     apt-get update -y && apt-get upgrade -y
@@ -42,8 +43,8 @@ install_roundcube() {
     LC_ALL=C.UTF-8 add-apt-repository ppa:ondrej/php -y
     apt-get update
 
-    # Install required packages
-    echo "Installing packages..."
+    # Install required packages without interactive prompts
+    export DEBIAN_FRONTEND=noninteractive
     apt-get install -y postfix apache2 mysql-server php8.1 libapache2-mod-php8.1 php8.1-cli php8.1-common \
     php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell \
     php8.0 libapache2-mod-php8.0 php8.0-cli php8.0-common php8.0-curl php8.0-mysql php8.0-xml \
@@ -52,7 +53,7 @@ install_roundcube() {
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
     <VirtualHost *:80>
-        ServerName $(hostname)
+        ServerName $HOSTNAME
         DocumentRoot /var/www/html/roundcube
 
         <Directory /var/www/html/roundcube/>
@@ -86,12 +87,15 @@ EOF
     sed -i "s/\$config\['default_host'\].*/\$config\['default_host'\] = 'localhost';/" config/config.inc.php
     sed -i "s/\$config\['smtp_server'\].*/\$config\['smtp_server'\] = 'localhost';/" config/config.inc.php
     sed -i "s/\$config\['support_url'\].*/\$config\['support_url'\] = 'mailto:$ROUNDCUBE_ADMIN_EMAIL';/" config/config.inc.php
-    sed -i "s/\$config\['mail_domain'\].*/\$config\['mail_domain'\] = '$domain';/" config/config.inc.php
+    sed -i "s/\$config\['mail_domain'\].*/\$config\['mail_domain'\] = '$EMAIL_DOMAIN';/" config/config.inc.php
     php /var/www/html/roundcube/bin/install-jsdeps.sh
 
     # Setup Roundcube database schema
     sudo php bin/initdb.sh --dir=SQL --create
     echo "Roundcube installation completed."
+
+    # Update Postfix configurations
+    update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
 }
 
 # Function to add a new Roundcube user
@@ -153,10 +157,10 @@ read -p "Enter your choice (1 or 2): " choice
 case $choice in
     1)
         read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
-        install_roundcube "$EMAIL_DOMAIN"
+        read -p "Enter hostname (e.g., mail): " HOSTNAME
+        install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME"
         ;;
     2)
-        read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
         add_roundcube_user
         ;;
     *)
