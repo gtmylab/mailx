@@ -143,21 +143,7 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-# Interactive input for domain and hostname
-read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
-read -p "Enter hostname (e.g., mail.example.com): " HOSTNAME
-
-# Update hostname and hosts file
-echo "$HOSTNAME" > /etc/hostname
-sed -i "s/127.0.0.1.*/127.0.0.1 localhost $HOSTNAME/" /etc/hosts
-hostnamectl set-hostname $HOSTNAME
-
-# Install Postfix with customized configuration
-echo "Installing Postfix..."
-apt-get install -y postfix
-update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
-
-# Perform installation or user creation based on user input
+# Select an option
 echo "Select an option:"
 echo "1. Install Roundcube"
 echo "2. Add Roundcube User"
@@ -166,9 +152,11 @@ read -p "Enter your choice (1 or 2): " choice
 
 case $choice in
     1)
+        read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
         install_roundcube "$EMAIL_DOMAIN"
         ;;
     2)
+        read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
         add_roundcube_user
         ;;
     *)
