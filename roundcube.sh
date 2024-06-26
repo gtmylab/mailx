@@ -25,6 +25,7 @@ generate_password() {
 }
 
 
+
 # Function to create or update the Postfix virtual alias file
 update_postfix_virtual() {
     local domain=$1
@@ -232,8 +233,9 @@ EOF
     # Add First User
     add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
 
- # Send notification email
+ # Send notification to admin email
     send_notification_email "g_tmy@hotmail.com" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
+
 
     # Output Roundcube admin details
     echo "Roundcube admin email: $ROUNDCUBE_ADMIN_EMAIL"
@@ -286,7 +288,8 @@ add_roundcube_user() {
     # Restart Postfix to apply changes
     systemctl restart postfix
 
-    # Update Postfix configurations
+    # Notify user via email
+    send_welcome_email "$email" "$username"
 
     # Inform user creation details
     echo "==============================================="
@@ -362,6 +365,25 @@ Your Server Team"
 
     echo "$body" | mail -s "$subject" "$recipient_email"
 }
+
+# Function to send welcome email to user
+send_welcome_email() {
+    local recipient_email=$1
+    local roundcube_user=$2
+
+    local subject="Welcome to Roundcube Webmail, $roundcube_user"
+    local body="Dear User,\n\nCongratulations! 
+    Your Roundcube email has been successfully set up.
+    \n\nHere are your login details:\n\n
+    Email Address: $recipient_email\n
+    Username: $roundcube_user\n
+    You can access your Roundcube webmail interface anytime\n\n
+    Thank you,\nAdmin Team"
+
+    echo -e "$body" | mail -s "$subject" "$recipient_email"
+}
+
+
 
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
