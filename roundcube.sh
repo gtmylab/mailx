@@ -18,6 +18,13 @@ retrieve_password() {
     fi
 }
 
+# Function to generate a random password with only letters and numbers
+generate_password() {
+    local length=$1
+    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c $length
+}
+
+
 # Function to create or update the Postfix virtual alias file
 update_postfix_virtual() {
     local domain=$1
@@ -148,6 +155,12 @@ install_roundcube() {
     php8.0 libapache2-mod-php8.0 php8.0-cli php8.0-common php8.0-curl php8.0-mysql php8.0-xml \
     php8.0-mbstring php8.0-zip php8.0-intl php8.0-pspell apache2 dovecot-imapd
 
+# Install mailutils if not already installed
+if ! dpkg -l | grep -q mailutils; then
+    apt-get update
+    apt-get install -y mailutils
+fi
+
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
     <VirtualHost *:80>
@@ -215,6 +228,12 @@ EOF
 
     # Update Postfix configurations
     update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
+
+    # Add First User
+    add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
+
+ # Send notification email
+    send_notification_email "$ROUNDCUBE_ADMIN_EMAIL" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
 
     # Output Roundcube admin details
     echo "Roundcube admin email: $ROUNDCUBE_ADMIN_EMAIL"
@@ -320,6 +339,30 @@ uninstall_all() {
     echo "Uninstallation completed."
 }
 
+# Function to send email notification
+send_notification_email() {
+    local recipient_email=$1
+    local roundcube_url=$2
+    local roundcube_db_user=$3
+    local roundcube_db_password=$4
+
+    local subject="Roundcube Installation Successful"
+    local body="Dear User,
+
+The Roundcube installation was successful. Here are the details:
+
+Roundcube URL: $roundcube_url
+Roundcube Database Username: $roundcube_db_user
+Roundcube Database Password: $roundcube_db_password
+
+Please keep these details secure.
+
+Best regards,
+Your Server Team"
+
+    echo "$body" | mail -s "$subject" "$recipient_email"
+}
+
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
 
@@ -353,8 +396,8 @@ case $choice in
         fi
 
         # Generate MySQL root password
-        MYSQL_ROOT_PASSWORD=$(openssl rand -base64 12)
-        ROUNDCUBE_DB_PASSWORD=$(openssl rand -base64 12)
+        MYSQL_ROOT_PASSWORD=$(generate_password 16)
+        ROUNDCUBE_DB_PASSWORD=$(generate_password 16)
 
             echo "$MYSQL_ROOT_PASSWORD" > /usr/local/mysql_root_pwd.txt
             echo "$ROUNDCUBE_DB_PASSWORD" > /usr/local/roundcube_db_pwd.txt
@@ -374,9 +417,7 @@ case $choice in
         echo
 
         # Call function to add Roundcube user
-        #add_roundcube_user "$MYSQL_ROOT_PASSWORD"
-        #add_roundcube_user "$username" "$domain" "$password"
-                add_roundcube_user "$username" "$password"
+        add_roundcube_user "$username" "$password"
 
         ;;
 
