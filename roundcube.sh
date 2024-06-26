@@ -104,8 +104,8 @@ update_postfix_config() {
 install_roundcube() {
     local EMAIL_DOMAIN=$1
     local HOSTNAME=$2
-    local MYSQL_ROOT_PASSWORD=$3
-    local ROUNDCUBE_DB_PASSWORD=$4
+    local MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_password /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
     local ROUNDCUBE_ADMIN_EMAIL="admin@$EMAIL_DOMAIN"
@@ -278,6 +278,48 @@ add_roundcube_user() {
     echo "==============================================="
 }
 
+# Function to uninstall Roundcube, including database and user
+uninstall_roundcube() {
+    local MYSQL_ROOT_PASSWORD
+    MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
+
+    # Drop Roundcube database and user
+    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS roundcubemail;"
+    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP USER 'roundcube'@'localhost';"
+
+    # Remove Roundcube directory
+  #  rm -rf /var/www/html/roundcube
+
+    echo "Roundcube uninstallation completed."
+}
+
+# Function to uninstall Postfix, MySQL, and Roundcube
+uninstall_all() {
+
+    echo "Uninstalling Postfix, MySQL, and Roundcube..."
+    # Call function to uninstall Roundcube database and user
+    uninstall_roundcube
+
+    # Stop services
+    systemctl stop postfix
+    systemctl stop apache2
+    systemctl stop mysql
+
+    # Remove packages
+    apt-get purge -y postfix mysql-server apache2 php* roundcube
+
+    # Remove configuration files
+    rm -rf /etc/postfix
+    rm -rf /etc/mysql
+    rm -rf /etc/apache2
+    rm -rf /etc/roundcube
+    rm -rf /var/www/html/roundcube
+
+
+
+    echo "Uninstallation completed."
+}
+
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
 
@@ -291,8 +333,10 @@ fi
 echo "Select an option:"
 echo "1. Install Roundcube"
 echo "2. Add Roundcube User"
+echo "3. Uninstall Roundcube"
+echo "4. Uninstall Postfix, MySQL, and Roundcube"
 
-read -p "Enter your choice (1 or 2): " choice
+read -p "Enter your choice (1, 2, 3, or 4): " choice
 
 case $choice in
     1)
@@ -336,9 +380,16 @@ case $choice in
 
         ;;
 
+    3)
+        # Call function to uninstall Roundcube
+        uninstall_roundcube
+        ;;
+    4)
+        # Call function to uninstall Postfix, MySQL, and Roundcube
+        uninstall_all
+        ;;
     *)
         echo "Invalid choice. Exiting."
         exit 1
         ;;
 esac
-
