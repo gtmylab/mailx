@@ -456,7 +456,7 @@ case $choice in
     if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
         uninstall_roundcube
     else
-        echo "Uninstallation aborted. Exiting."
+        echo "Exiting."
     fi
     exit 1
     ;;
@@ -466,8 +466,9 @@ case $choice in
 
     if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
        # Call function to uninstall Postfix, MySQL, and Roundcube
-        uninstall_all    else
-        echo "Uninstallation aborted. Exiting."
+        uninstall_all    
+        else
+        echo "Exiting."
     fi
     exit 1
     ;;
