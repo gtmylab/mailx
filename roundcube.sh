@@ -21,7 +21,12 @@ retrieve_password() {
 # Function to generate a random password with only letters and numbers
 generate_password() {
     local length=$1
-    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c $length
+    local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    local password=""
+    for i in $(seq 1 $length); do
+        password+=$(echo $chars | fold -w1 | shuf | head -n1)
+    done
+    echo $password
 }
 
 
@@ -112,6 +117,7 @@ update_postfix_config() {
 install_roundcube() {
     local EMAIL_DOMAIN=$1
     local HOSTNAME=$2
+    local ADMIN_MAILX_EMAIL=$3    
     local MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
     local ROUNDCUBE_DB_PASSWORD=$(retrieve_password /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
@@ -234,7 +240,7 @@ EOF
     add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
 
  # Send notification to admin email
-    send_notification_email "g_tmy@hotmail.com" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
+    send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME/roundcube" "roundcube" "$ROUNDCUBE_ADMIN_PASS"
 
 
     # Output Roundcube admin details
@@ -310,7 +316,7 @@ uninstall_roundcube() {
     mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP USER 'roundcube'@'localhost';"
 
     # Remove Roundcube directory
-  #  rm -rf /var/www/html/roundcube
+    rm -rf /var/www/html/roundcube
 
     echo "Roundcube uninstallation completed."
 }
@@ -408,6 +414,7 @@ case $choice in
         # Prompt for email domain, hostname, and MySQL root password
         read -p "Enter email domain (e.g., example.com): " EMAIL_DOMAIN
         read -p "Enter  hostname (e.g., mail.example.com): " HOSTNAME
+        read -p "Enter  Admin Email: " ADMIN_MAILX_EMAIL
 
         # Hostname (e.g., mail.example.com): "
       #  HOSTNAME=$(hostname)
@@ -426,10 +433,10 @@ case $choice in
             echo "$EMAIL_DOMAIN" > /usr/local/roundcube_mail_domain.txt
 
         # Install Roundcube with specified configurations
-        install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$MYSQL_ROOT_PASSWORD" "$ROUNDCUBE_DB_PASSWORD"
+        install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
 
         # Output MySQL root password
-        echo "MySQL root password: $MYSQL_ROOT_PASSWORD"
+        #echo "MySQL root password: $MYSQL_ROOT_PASSWORD"
         ;;
 
     2)
@@ -444,13 +451,27 @@ case $choice in
         ;;
 
     3)
-        # Call function to uninstall Roundcube
+    read -p "Are you sure you want to uninstall ? (yes or no): " RECONFIRM_UNINSTALL
+
+    if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
         uninstall_roundcube
-        ;;
+    else
+        echo "Uninstallation aborted. Exiting."
+    fi
+    exit 1
+    ;;
+
     4)
-        # Call function to uninstall Postfix, MySQL, and Roundcube
-        uninstall_all
-        ;;
+    read -p "Are you sure you want to uninstall Postfix, MySQL, and Roundcube ? (yes or no): " RECONFIRM_UNINSTALL
+
+    if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
+       # Call function to uninstall Postfix, MySQL, and Roundcube
+        uninstall_all    else
+        echo "Uninstallation aborted. Exiting."
+    fi
+    exit 1
+    ;;
+
     *)
         echo "Invalid choice. Exiting."
         exit 1
