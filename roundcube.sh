@@ -157,16 +157,11 @@ install_roundcube() {
     mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;"
 
     # Install required packages for Roundcube
-    apt-get install -y postfix apache2 php8.1 libapache2-mod-php8.1 php8.1-cli php8.1-common \
+    apt-get install -y postfix mailutils apache2 php8.1 libapache2-mod-php8.1 php8.1-cli php8.1-common \
     php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell \
     php8.0 libapache2-mod-php8.0 php8.0-cli php8.0-common php8.0-curl php8.0-mysql php8.0-xml \
     php8.0-mbstring php8.0-zip php8.0-intl php8.0-pspell apache2 dovecot-imapd
 
-# Install mailutils if not already installed
-if ! dpkg -l | grep -q mailutils; then
-    apt-get update
-    apt-get install -y mailutils
-fi
 
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
@@ -374,6 +369,7 @@ Your Server Team"
 
 # Function to send welcome email to user
 send_welcome_email() {
+
     local recipient_email=$1
     local roundcube_user=$2
 
@@ -390,6 +386,25 @@ send_welcome_email() {
 }
 
 
+# Function to send welcome email to user
+send_test_message() {
+
+    # Install mailutils if not already installed
+if ! dpkg -l | grep -q mailutils; then
+    apt-get update
+    apt-get install -y mailutils
+fi
+
+    local email_to=$1
+    local email_subject=$2
+    local email_body=$3
+    local email_domain=$(retrieve_password /usr/local/roundcube_mail_domain.txt)
+
+    echo -e "$email_body" | mail -s "$email_subject" -a "From: admin@$email_domain" "$email_to"
+echo "Test mail sent to $email_to"
+
+}
+
 
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
@@ -404,10 +419,11 @@ fi
 echo "Select an option:"
 echo "1. Install Roundcube"
 echo "2. Add Roundcube User"
-echo "3. Uninstall Roundcube"
-echo "4. Uninstall Postfix, MySQL, and Roundcube"
+echo "3. Send a test mail"
+echo "4. Uninstall Roundcube"
+echo "5. Uninstall Postfix, MySQL, and Roundcube"
 
-read -p "Enter your choice (1, 2, 3, or 4): " choice
+read -p "Enter your choice (1, 2, 3, 4 or 5): " choice
 
 case $choice in
     1)
@@ -451,6 +467,20 @@ case $choice in
         ;;
 
     3)
+        read -p "Email to: " email_to
+        read -p "Subject: " email_subject
+        read -p "Message Body: " email_body
+
+      #  read -p "Enter domain: " domain
+        echo
+
+        # Call function to add Roundcube user
+        send_test_message "$email_to" "$email_subject" "$email_body"
+
+        ;;
+
+
+    4)
     read -p "Are you sure you want to uninstall ? (yes or no): " RECONFIRM_UNINSTALL
 
     if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
@@ -461,7 +491,7 @@ case $choice in
     exit 1
     ;;
 
-    4)
+    5)
     read -p "Are you sure you want to uninstall Postfix, MySQL, and Roundcube ? (yes or no): " RECONFIRM_UNINSTALL
 
     if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
