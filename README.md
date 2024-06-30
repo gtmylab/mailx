@@ -5,6 +5,6 @@
 - Support is only for Ubuntu 20.04 LTS 
 
 ```json
-cd ~ && curl -O https://raw.githubusercontent.com/gtmylab/mailx/main/roundcube.sh && chmod +x roundcube.sh && ./roundcube.sh
+cd ~ && curl -O https://raw.githubusercontent.com/gtmylab/mailx/main/mailx && chmod +x mailx && ./mailx
 ```
 
