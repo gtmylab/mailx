@@ -484,9 +484,9 @@ Roundcube Database Password: $roundcube_db_password
 
 Please keep these details secure.
 
-You can no access:
-Webmail URL via:$roundcube_url
-Mailx URL via:$mailx_url 
+You can now access:
+Webmail URL via: $roundcube_url
+Mailx URL via: $mailx_url 
 
 Best regards,
 Your Server Team"
