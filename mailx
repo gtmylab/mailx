@@ -83,7 +83,7 @@ update_postfix_virtual() {
     if ! check_string_in_file "/etc/postfix/virtual" "$username@$domain"; then
         echo "$username@$domain $username" >> /etc/postfix/virtual
         postmap /etc/postfix/virtual 2>/dev/null
-        echo "Updated /etc/postfix/virtual with $username@$domain."
+       # echo "Updated /etc/postfix/virtual with $username@$domain."
     else
         echo "Entry for $username@$domain already exists in /etc/postfix/virtual."
     fi
@@ -92,6 +92,7 @@ update_postfix_virtual() {
 # Function to update the Postfix main.cf configuration
 update_postfix_maincf() {
     local domain=$1
+    echo "Postfix main.cf configuration...."
 
     if ! check_string_in_file "/etc/postfix/main.cf" "virtual_alias_domains"; then
         echo "virtual_alias_domains = $domain" >> /etc/postfix/main.cf 2>/dev/null
@@ -121,7 +122,7 @@ update_postfix_maincf() {
         sed -i "/^mydestination/c\mydestination = \$myhostname, localhost.\$mydomain, localhost, \$mydomain" /etc/postfix/main.cf 2>/dev/null
     fi
 
-    echo "Postfix main.cf configuration updated....[OK]"
+    echo "[OK]"
 }
 
 
@@ -130,31 +131,31 @@ update_postfix_config() {
     local domain=$1
     local hostname=$2
 
-    echo "Postfix Backup original configuration files.....[OK]"
+    echo "Downloading customized Postfix configuration files....."
 
     # Backup original configuration files
     cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
     cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
 
-    echo "Downloading customized Postfix configuration files.....[OK]"
-
     # Download customized Postfix configuration files
     wget -qO /etc/postfix/main.cf https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf
     wget -qO /etc/postfix/master.cf https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf
-    
-    echo "Replacing Postfix placeholders with actual values.....[OK]"
+    echo "[OK]"
+
+    echo "Replacing Postfix placeholders with actual values..."
 
     # Replace placeholders with actual values in Postfix configuration files
     sed -i "s/{EMAIL_DOMAIN}/$domain/g" /etc/postfix/main.cf 2>/dev/null
     sed -i "s/{EMAIL_DOMAIN}/$domain/g" /etc/postfix/master.cf 2>/dev/null
     sed -i "s/{HOSTNAME}/$hostname/g" /etc/postfix/main.cf 2>/dev/null
     sed -i "s/{HOSTNAME}/$hostname/g" /etc/postfix/master.cf 2>/dev/null
+    echo "[OK]"
 
-    echo "Restart Postfix to apply changes.....[OK]"
+    echo "Postfix configuration updated..."
     # Restart Postfix to apply changes
     restart_service postfix
+    echo "[OK]"
 
-    echo "Postfix configuration updated....[OK]"
 }
 
 
@@ -470,7 +471,7 @@ EOF
     cd roundcube
     cp config/config.inc.php.sample config/config.inc.php
     echo "[OK]"
-    echo "Configuring Roundcube...[OK]"
+    echo "Configuring Roundcube..."
 
     # Configure Roundcube
         # Check if mail_domain exists and add if not
@@ -483,13 +484,13 @@ EOF
     sed -i "s/\$config\['smtp_user'\].*/\$config\['smtp_user'\] = '';/" config/config.inc.php
     sed -i "s/\$config\['smtp_pass'\].*/\$config\['smtp_pass'\] = '';/" config/config.inc.php
     sed -i "/\$config\['smtp_server'\]/i \$config['mail_domain'] = '$EMAIL_DOMAIN';" config/config.inc.php
+    echo "[OK]"
 
-    echo "Initialize Roundcube database schema...[OK]"
+    echo "Initialize Roundcube database schema..."
 
     # Initialize Roundcube database schema
     sudo -u www-data ./bin/initdb.sh --dir=./SQL --create
-
-    echo "Roundcube installation completed...[OK]"
+    echo "[OK]"
 
     # Update Postfix configurations
     update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
@@ -532,11 +533,13 @@ add_roundcube_user() {
 
     # Create user account
     useradd -m -s /bin/bash -p "$encrypted_password" "$username"
+    echo ""
     echo "User $username created successfully."
 
     # Create Maildir for user
     mkdir -p /home/$username/Maildir
     chown -R $username:$username /home/$username/Maildir
+    echo ""
     echo "Mail directory created for $username."
 
     # Retrieve MySQL root and Roundcube DB passwords
