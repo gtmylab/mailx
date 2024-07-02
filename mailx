@@ -4,8 +4,14 @@
 check_string_in_file() {
     local file=$1
     local string=$2
-    grep -qF "$string" "$file"
+    grep -qF "$string" "$file" 2>/dev/null
 }
+
+# Function to generate a blowfish secret
+generate_blowfish_secret() {
+    tr -dc 'a-zA-Z0-9./' < /dev/urandom | fold -w 32 | head -n 1
+}
+
 function hide_output {
 	OUTPUT=$(mktemp)
 	set +e
@@ -44,7 +50,7 @@ function apt_install {
 	apt_get_quiet install "$@"
 }
 # Function to retrieve stored password
-retrieve_password() {
+retrieve_file_data() {
     local filepath=$1
     if [ -f "$filepath" ]; then
         cat "$filepath"
@@ -76,7 +82,7 @@ update_postfix_virtual() {
 
     if ! check_string_in_file "/etc/postfix/virtual" "$username@$domain"; then
         echo "$username@$domain $username" >> /etc/postfix/virtual
-        postmap /etc/postfix/virtual
+        postmap /etc/postfix/virtual 2>/dev/null
         echo "Updated /etc/postfix/virtual with $username@$domain."
     else
         echo "Entry for $username@$domain already exists in /etc/postfix/virtual."
@@ -152,13 +158,94 @@ update_postfix_config() {
 }
 
 
+
+# Function to install phpmyadmin
+setup_phpmyadmin() {
+    echo "Installing phpMyAdmin..."
+
+# Variables
+PMA_VERSION="5.1.1"
+PMA_DIR="/var/www/html/phpmyadmin"
+PMA_URL="https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+PMA_TAR="phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+PMA_TAR_DIR="phpMyAdmin-${PMA_VERSION}-all-languages"
+
+
+# Download and extract phpMyAdmin
+wget -q $PMA_URL -O $PMA_TAR
+tar -xzf $PMA_TAR
+
+# Move to the desired directory
+sudo mv $PMA_TAR_DIR $PMA_DIR
+
+# Generate a new secret
+#SECRET=$(openssl rand -base64 32)
+SECRET=$(generate_blowfish_secret)
+
+# Create or update the config file with the new secret
+cp $PMA_DIR/config.sample.inc.php $PMA_DIR/config.inc.php
+CONFIG_FILE="$PMA_DIR/config.inc.php"
+
+#sed -i "s/\$cfg\['blowfish_secret'\].*/\$cfg\['blowfish_secret'\] = '$SECRET';/" $CONFIG_FILE
+sed -i "s|\(\$cfg\['blowfish_secret'\]\).*|\1 = '$SECRET';|" $CONFIG_FILE
+
+# Set the appropriate permissions
+sudo chown -R www-data:www-data $PMA_DIR
+sudo find $PMA_DIR -type d -exec chmod 755 {} \;
+sudo find $PMA_DIR -type f -exec chmod 644 {} \;
+
+# Restart Apache to apply changes
+sudo systemctl restart apache2
+
+}
+
+
+# Function to generate DKIM key and set global variables
+generate_dkim() {
+    # Retrieve domain
+    DOMAIN=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
+
+    # Ensure the domain is not empty
+    if [[ -z "$DOMAIN" ]]; then
+        echo "Error: No domain found in /usr/local/roundcube_mail_domain.txt"
+        exit 1
+    fi
+
+    # DKIM settings
+    SELECTOR="default"
+    DKIM_DIR="/etc/opendkim"
+    KEY_FILE="$DKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
+    TXT_RECORD_FILE="$DKIM_DIR/keys/$DOMAIN/$SELECTOR.txt"
+
+    # Create necessary directories
+    sudo mkdir -p "$DKIM_DIR/keys/$DOMAIN"
+
+    # Generate DKIM key
+    sudo opendkim-genkey -s $SELECTOR -d $DOMAIN -D "$DKIM_DIR/keys/$DOMAIN" -b 2048
+
+    # Set permissions
+    sudo chown opendkim:opendkim "$KEY_FILE"
+    sudo chmod 600 "$KEY_FILE"
+
+    # Output the DNS TXT record
+    TXT_RECORD=$(cat "$TXT_RECORD_FILE")
+    # Clean up
+    sudo rm "$TXT_RECORD_FILE"
+    # Reload OpenDKIM
+    sudo systemctl restart opendkim
+    # Output key file location
+    echo "DKIM private key stored at: $KEY_FILE"
+}
+
+
+
 # Function to install Roundcube
 install_roundcube() {
     local EMAIL_DOMAIN=$1
     local HOSTNAME=$2
     local ADMIN_MAILX_EMAIL=$3    
-    local MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
-    local ROUNDCUBE_DB_PASSWORD=$(retrieve_password /usr/local/roundcube_db_pwd.txt)
+    local MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
     local ROUNDCUBE_ADMIN_EMAIL="admin@$EMAIL_DOMAIN"
@@ -189,6 +276,10 @@ PHP_INI_FILE="/etc/php/5.6/fpm/php.ini"
     clear
         # Update system and install necessary packages
         echo "Installing packages needed for setup..."
+        echo "."
+        echo ".."
+        echo "..."
+        echo "....please wait...."
         apt-get -qq update > /dev/null && apt-get -qq upgrade -y > /dev/null
         echo "System updated and upgraded successfully....[OK]"
         echo "[OK]"
@@ -209,17 +300,36 @@ PHP_INI_FILE="/etc/php/5.6/fpm/php.ini"
     apt-get -qq install -y mysql-server > /dev/null 
 
     # Create Roundcube database and user
-    echo "MySQL (Database server) warnings [OK]....."
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS $ROUNDCUBE_DB_NAME;"
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "CREATE USER IF NOT EXISTS '$ROUNDCUBE_DB_USER'@'localhost' IDENTIFIED BY '$ROUNDCUBE_DB_PASSWORD';"
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "GRANT ALL PRIVILEGES ON $ROUNDCUBE_DB_NAME.* TO '$ROUNDCUBE_DB_USER'@'localhost';"
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;"
+    #echo "MySQL (Database server) warnings [OK]....."
+    # Create or overwrite the .my.cnf file
+    cat <<EOF > ~/.my.cnf
+    [client]
+    user=root
+    password=$MYSQL_ROOT_PASSWORD
+EOF
+
+    # Set the appropriate permissions
+    chmod 600 ~/.my.cnf
+
+    # Create the database if it doesn't exist
+    mysql -e "CREATE DATABASE IF NOT EXISTS $ROUNDCUBE_DB_NAME;" 2>/dev/null
+
+    # Create the user if it doesn't exist and grant privileges
+    mysql -e "CREATE USER IF NOT EXISTS '$ROUNDCUBE_DB_USER'@'localhost' IDENTIFIED BY '$ROUNDCUBE_DB_PASSWORD';" 2>/dev/null
+    mysql -e "GRANT ALL PRIVILEGES ON $ROUNDCUBE_DB_NAME.* TO '$ROUNDCUBE_DB_USER'@'localhost';" 2>/dev/null
+    mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
     echo "[OK]"
 
     # Install required packages for Roundcube
     echo "Installing Postfix & Dovecot (Mail server)..."
     apt_install postfix mailutils dovecot-imapd
     echo "[OK]"
+        # Install opendkim if not installed
+    if ! command -v opendkim-genkey &> /dev/null; then
+        echo "Installing OpenDKIM..."
+        apt_install opendkim opendkim-tools
+        echo "[OK]"
+    fi
     echo "Installing Apache (web server)..."
     echo "[OK]"
     apt_install apache2 libapache2-mod-fcgid libapache2-mod-php8.1 libapache2-mod-fcgid
@@ -260,19 +370,12 @@ update_php_ini "memory_limit" "$MEMORY_LIMIT" "$PHP_INI_FILE"
 sudo systemctl restart php8.1-fpm 2>/dev/null
 sudo systemctl restart php5.6-fpm 2>/dev/null
 
-
-# Configure Apache Virtual Hosts
-#wget -qO /etc/apache2/sites-available/roundcube.conf https://raw.githubusercontent.com/gtmylab/mailx/main/apache2/roundcube.conf
-#sed -i "s/ServerName HOSTNAME/ServerName $HOSTNAME/" /etc/apache2/sites-available/roundcube.conf
-
-#wget -qO /etc/apache2/sites-available/mailx.conf https://raw.githubusercontent.com/gtmylab/mailx/main/apache2/mailx.conf
-#sed -i "s/ServerName MAILHOSTNAME/ServerName $EMAIL_DOMAIN/" /etc/apache2/sites-available/mailx.conf
-    echo "Installing additional Mailing Support..."
+echo "Installing additional Mailing Support..."
 # Download and install
     mkdir -p  /var/www/html/mailx
     wget -qO  /var/www/html/mailx/index.php https://raw.githubusercontent.com/gtmylab/mailx/main/mailer.php
     chown -R www-data:www-data /var/www/html/mailx
-    echo "Installing additional Mailing Support...[COMPLETED]"
+    echo "[OK]"
 
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
@@ -319,15 +422,42 @@ EOF
         CustomLog \${APACHE_LOG_DIR}/mailx_access.log combined
     </VirtualHost>
 EOF
+
+    # Configure Apache for PhPmyadmin
+    cat <<EOF > /etc/apache2/sites-available/phpmyadmin.conf
+    <VirtualHost *:8082>
+        ServerName $HOSTNAME
+        DocumentRoot /var/www/html/phpmyadmin
+
+        <Directory /var/www/html/phpmyadmin/>
+            Options +FollowSymlinks
+            AllowOverride All
+            <IfModule mod_dir.c>
+                DirectoryIndex index.php
+            </IfModule>
+        </Directory>
+
+        <FilesMatch \.php$>
+            SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+         </FilesMatch>
+
+        ErrorLog \${APACHE_LOG_DIR}/phpmyadmin_error.log
+        CustomLog \${APACHE_LOG_DIR}/phpmyadmin_access.log combined
+    </VirtualHost>
+EOF
     # Disable old PHP version and enable PHP 8.1
     a2enmod php8.1
     systemctl restart apache2
     
     echo "[OK]"
-    echo "[OK]"
     # Enable the sites and restart Apache
     a2ensite roundcube.conf
     a2ensite mailx.conf
+    a2ensite phpmyadmin.conf
+
+        # Download and install Phpmyadmin
+    setup_phpmyadmin
+    echo "[OK]"
     systemctl restart apache2
 
     # Download and install Roundcube
@@ -349,17 +479,10 @@ EOF
     sed -i "s/\$config\['default_host'\].*/\$config\['default_host'\] = 'localhost';/" config/config.inc.php
     sed -i "s/\$config\['smtp_server'\].*/\$config\['smtp_server'\] = 'localhost';/" config/config.inc.php
     sed -i "s/\$config\['support_url'\].*/\$config\['support_url'\] = 'mailto:$ROUNDCUBE_ADMIN_EMAIL';/" config/config.inc.php
-
     sed -i "s/\$config\['smtp_port'\].*/\$config\['smtp_port'\] = 25;/" config/config.inc.php
     sed -i "s/\$config\['smtp_user'\].*/\$config\['smtp_user'\] = '';/" config/config.inc.php
     sed -i "s/\$config\['smtp_pass'\].*/\$config\['smtp_pass'\] = '';/" config/config.inc.php
-
-   # if ! check_string_in_file config/config.inc.php "\$config['mail_domain']"; then
-        sed -i "/\$config\['smtp_server'\]/i \$config['mail_domain'] = '$EMAIL_DOMAIN';" config/config.inc.php
-  #  else
-   #     sed -i "s/\$config\['mail_domain'\].*/\$config\['mail_domain'\] = '$EMAIL_DOMAIN';/" config/config.inc.php
-    #fi
-
+    sed -i "/\$config\['smtp_server'\]/i \$config['mail_domain'] = '$EMAIL_DOMAIN';" config/config.inc.php
 
     echo "Initialize Roundcube database schema...[OK]"
 
@@ -370,14 +493,15 @@ EOF
 
     # Update Postfix configurations
     update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
-   # install_mailx "$EMAIL_DOMAIN"
+
+   # Call the generate_dkim function
+    generate_dkim
 
     # Add First User
     add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
 
  # Send notification to admin email
-    send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME:8080" "roundcube" "$ROUNDCUBE_ADMIN_PASS" "http://$EMAIL_DOMAIN:8081"
-
+    send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME:8080" "roundcube" "$ROUNDCUBE_ADMIN_PASS" "http://$EMAIL_DOMAIN:8081" "$TXT_RECORD" "$SELECTOR" "http://$HOSTNAME:8082"
 
     # Output Roundcube admin details
     echo "Roundcube admin email: $ROUNDCUBE_ADMIN_EMAIL"
@@ -389,10 +513,10 @@ add_roundcube_user() {
     #local ROUNDCUBE_DB_PASSWORD=$1
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
-
     local username=$1
-    local domain=$(retrieve_password /usr/local/roundcube_mail_domain.txt)
+    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local password=$2
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
     # Combine username and domain to create full email address
     email="$username@$domain"
@@ -416,13 +540,29 @@ add_roundcube_user() {
     echo "Mail directory created for $username."
 
     # Retrieve MySQL root and Roundcube DB passwords
-    MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
-    ROUNDCUBE_DB_PASSWORD=$(retrieve_password /usr/local/roundcube_db_pwd.txt)
+    MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
+    ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
 
-    # Update Roundcube database with new user
-    mysql -u $ROUNDCUBE_DB_USER -p"$ROUNDCUBE_DB_PASSWORD" $ROUNDCUBE_DB_NAME -e "INSERT INTO users (username, mail_host, created, last_login, language) VALUES ('$username', '$domain', NOW(), NOW(), 'en_US.utf8');"
+    # Define the ROUNDCUBE_PREFERENCE variable
+    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
+    # Insert new user and retrieve the auto-incremented ID
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
+    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+    SELECT LAST_INSERT_ID();
+    ")
 
+    # Check if USER_ID was retrieved successfully
+    if [ -z "$USER_ID" ]; then
+        echo "Failed to retrieve USER_ID. Aborting."
+        exit 1
+    fi
+
+    # Insert into identities table
+    mysql $ROUNDCUBE_DB_NAME -e "
+    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
+    "
     # Update Postfix configurations
     update_postfix_virtual "$domain" "$username"
     update_postfix_maincf "$domain"
@@ -445,16 +585,16 @@ add_roundcube_user() {
 # Function to uninstall Roundcube, including database and user
 uninstall_roundcube() {
     local MYSQL_ROOT_PASSWORD
-    MYSQL_ROOT_PASSWORD=$(retrieve_password /usr/local/mysql_root_pwd.txt)
+    MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
 
     # Drop Roundcube database and user
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS roundcubemail;"
-    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP USER 'roundcube'@'localhost';"
+    mysql -e "DROP DATABASE IF EXISTS roundcubemail;"
+    mysql -e "DROP USER 'roundcube'@'localhost';"
 
     # Remove Roundcube directory
     rm -rf /var/www/html/roundcube
 
-    echo "Roundcube uninstallation completed."
+    echo "Roundcube uninstallation completed..."
 }
 
 # Function to uninstall Postfix, MySQL, and Roundcube
@@ -481,6 +621,8 @@ uninstall_all() {
     rm -rf /etc/apache2
     rm -rf /etc/roundcube
     rm -rf /var/www/html/roundcube
+    rm -rf /var/www/html/phpmyadmin
+    rm -rf /var/www/html/mailx
     sudo deluser mysql
     sudo delgroup mysql
     echo '[OK]'
@@ -501,6 +643,10 @@ send_notification_email() {
     local roundcube_db_user=$3
     local roundcube_db_password=$4
     local mailx_url=$5
+    local SELECTOR=$6
+    local TXT_RECORD=$7
+    local db_url=$8
+    local DOMAIN=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
 
     local subject="Roundcube Installation Successful"
     local body="Dear User,
@@ -515,6 +661,13 @@ Please keep these details secure.
 You can now access:
 Webmail URL via: $roundcube_url
 Mailx URL via: $mailx_url 
+DB URL via: $db_url 
+
+Add the following TXT record to DNS settings:
+
+Host: $SELECTOR._domainkey.$DOMAIN
+Value: $TXT_RECORD
+
 
 Best regards,
 Your Server Team"
@@ -553,7 +706,7 @@ fi
     local email_to=$1
     local email_subject=$2
     local email_body=$3
-    local email_domain=$(retrieve_password /usr/local/roundcube_mail_domain.txt)
+    local email_domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
 
     echo -e "$email_body" | mail -s "$email_subject" -a "From: admin@$email_domain" "$email_to"
 echo "Test mail sent to $email_to"
@@ -641,7 +794,7 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
     2)
         read -p "Enter new username: " username
       #  read -p "Enter domain: " domain
-        read -sp "Enter password for $username@$(retrieve_password /usr/local/roundcube_mail_domain.txt): " password
+        read -sp "Enter password for $username@$(retrieve_file_data /usr/local/roundcube_mail_domain.txt): " password
         echo
 
         # Call function to add Roundcube user
