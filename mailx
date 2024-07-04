@@ -83,8 +83,15 @@ configure_dovecot_quota() {
     cp /etc/dovecot/conf.d/20-imap.conf /etc/dovecot/conf.d/20-imap.conf.bak
     cp /etc/dovecot/conf.d/20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf.bak
 
-    # Enable maildir format
-    sudo sed -i "s/^mail_location = .*$/mail_location = mbox:~\/mail:INBOX=\/var\/mail\/%u/" /etc/dovecot/conf.d/10-mail.conf
+            # Enable maildir format
+        # Define the new mail_location setting
+        new_mail_location="mbox:~/mail:INBOX=/var/mail/%u"
+
+        # Escape forward slashes for sed
+        escaped_mail_location=$(echo "$new_mail_location" | sed 's/\//\\\//g')
+
+        # Use sed to replace the mail_location line in the configuration file
+        sudo sed -i "s/^mail_location = .*$/mail_location = $escaped_mail_location/" /etc/dovecot/conf.d/10-mail.conf
 
     # Enable quota support
     cat <<EOT > /etc/dovecot/conf.d/90-quota.conf
