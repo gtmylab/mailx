@@ -84,7 +84,7 @@ configure_dovecot_quota() {
     cp /etc/dovecot/conf.d/20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf.bak
 
     # Enable maildir format
-    sed -i 's/^mail_location = .*$/mail_location = maildir:~\/Maildir/' /etc/dovecot/conf.d/10-mail.conf
+    sudo sed -i "s/^mail_location = .*$/mail_location = mbox:~\/mail:INBOX=\/var\/mail\/%u/" /etc/dovecot/conf.d/10-mail.conf
 
     # Enable quota support
     cat <<EOT > /etc/dovecot/conf.d/90-quota.conf
