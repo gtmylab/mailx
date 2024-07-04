@@ -73,7 +73,44 @@ generate_password() {
     echo $password
 }
 
+# Function to configure Dovecot for quotas
+configure_dovecot_quota() {
+    echo "Configuring Dovecot for quota support..."
 
+    # Backup existing configuration files
+    cp /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.bak
+    cp /etc/dovecot/conf.d/10-mail.conf /etc/dovecot/conf.d/10-mail.conf.bak
+    cp /etc/dovecot/conf.d/20-imap.conf /etc/dovecot/conf.d/20-imap.conf.bak
+    cp /etc/dovecot/conf.d/20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf.bak
+
+    # Enable maildir format
+    sed -i 's/^mail_location = .*$/mail_location = maildir:~\/Maildir/' /etc/dovecot/conf.d/10-mail.conf
+
+    # Enable quota support
+    cat <<EOT > /etc/dovecot/conf.d/90-quota.conf
+plugin {
+  quota = maildir:User quota
+  quota_rule = *:storage=1G
+}
+
+protocol imap {
+  mail_plugins = \$mail_plugins quota
+}
+
+protocol pop3 {
+  mail_plugins = \$mail_plugins quota
+}
+EOT
+
+    echo "Dovecot quota configuration complete."
+}
+
+# Function to restart Dovecot service
+restart_dovecot() {
+    echo "Restarting Dovecot service..."
+    systemctl restart dovecot
+    echo "Dovecot service restarted."
+}
 
 # Function to create or update the Postfix virtual alias file
 update_postfix_virtual() {
@@ -323,8 +360,12 @@ EOF
 
     # Install required packages for Roundcube
     echo "Installing Postfix & Dovecot (Mail server)..."
-    apt_install postfix mailutils dovecot-imapd
+    apt_install postfix mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql -y
     echo "[OK]"
+
+    configure_dovecot_quota
+    restart_dovecot
+
         # Install opendkim if not installed
     if ! command -v opendkim-genkey &> /dev/null; then
         echo "Installing OpenDKIM..."
@@ -499,7 +540,7 @@ EOF
     generate_dkim
 
     # Add First User
-    add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS"
+    add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS" 1000
 
  # Send notification to admin email
     send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME:8080" "roundcube" "$ROUNDCUBE_ADMIN_PASS" "http://$EMAIL_DOMAIN:8081" "$TXT_RECORD" "$SELECTOR" "http://$HOSTNAME:8082"
@@ -517,6 +558,7 @@ add_roundcube_user() {
     local username=$1
     local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local password=$2
+    local quota_size=$3  # Quota size in MB
     local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
     # Combine username and domain to create full email address
@@ -541,6 +583,9 @@ add_roundcube_user() {
     chown -R $username:$username /home/$username/Maildir
     echo ""
     echo "Mail directory created for $username."
+
+    # Set up quota for the user
+    echo "quota_rule = *:storage=${quota_size}M" >> /home/$username/.dovecot.sieve
 
     # Retrieve MySQL root and Roundcube DB passwords
     MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
@@ -582,6 +627,7 @@ add_roundcube_user() {
     echo "Email: $email"
     echo "Username: $username"
     echo "Password: $password"
+    echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
 
@@ -801,7 +847,7 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         echo
 
         # Call function to add Roundcube user
-        add_roundcube_user "$username" "$password"
+        add_roundcube_user "$username" "$password" 2000
 
         ;;
 
