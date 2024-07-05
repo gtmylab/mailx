@@ -393,7 +393,9 @@ apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql 
 apt_install php5.6 php5.6-fpm php5.6-cli php5.6-common php5.6-curl php5.6-mysql php5.6-xml php5.6-mbstring php5.6-zip php5.6-intl php5.6-pspell
 
 # Enable required Apache modules
-a2enmod actions fcgid alias proxy_fcgi
+echo "Enabling Apache modules..."
+a2enmod actions fcgid alias proxy_fcgi 2>/dev/null
+echo "[OK]"
 
 # Check PHP-FPM service name for PHP 8.1
 PHPFPM_SERVICE=$(systemctl list-units --full --all | grep php8.1-fpm | awk '{print $1}')
@@ -495,15 +497,20 @@ EOF
     </VirtualHost>
 EOF
     # Disable old PHP version and enable PHP 8.1
-    a2enmod php8.1
+    a2enmod php8.1 2>/dev/null 
     systemctl restart apache2
     
     echo "[OK]"
     # Enable the sites and restart Apache
-    a2ensite roundcube.conf
-    a2ensite mailx.conf
-    a2ensite phpmyadmin.conf
-
+    echo "[Enabling site roundcube...]"
+    a2ensite roundcube.conf 2>/dev/null
+    echo "[OK]"
+    echo "[Enabling site mailx...]"
+    a2ensite mailx.conf 2>/dev/null
+    echo "[OK]"
+    echo "[Enabling site phpmyadmin...]"
+    a2ensite phpmyadmin.conf 2>/dev/null
+    echo "[OK]"
         # Download and install Phpmyadmin
     setup_phpmyadmin
     echo "[OK]"
