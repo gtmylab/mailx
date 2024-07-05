@@ -502,13 +502,13 @@ EOF
     
     echo "[OK]"
     # Enable the sites and restart Apache
-    echo "[Enabling site roundcube...]"
+    echo "Enabling site roundcube..."
     a2ensite roundcube.conf > /dev/null 2>&1
     echo "[OK]"
-    echo "[Enabling site mailx...]"
+    echo "Enabling site mailx..."
     a2ensite mailx.conf > /dev/null 2>&1
     echo "[OK]"
-    echo "[Enabling site phpmyadmin...]"
+    echo "Enabling site phpmyadmin..."
     a2ensite phpmyadmin.conf > /dev/null 2>&1
     echo "[OK]"
         # Download and install Phpmyadmin
@@ -562,6 +562,10 @@ EOF
     # Output Roundcube admin details
     echo "Roundcube admin email: $ROUNDCUBE_ADMIN_EMAIL"
     echo "Roundcube admin password: $ROUNDCUBE_ADMIN_PASS"
+    echo ""
+    echo ""
+    echo "MailX Installation Successful !"
+
 }
 
 # Function to add a new Roundcube user
