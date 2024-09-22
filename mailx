@@ -325,7 +325,8 @@ PHP_INI_FILE="/etc/php/5.6/fpm/php.ini"
         echo ".."
         echo "..."
         echo "....please wait...."
-        apt-get -qq update > /dev/null && apt-get -qq upgrade -y > /dev/null
+        # apt-get -qq update > /dev/null && apt-get -qq upgrade -y > /dev/null
+        apt-get -qq update > /dev/null
         echo "System updated and upgraded successfully....[OK]"
         echo "[OK]"
         echo "Installing Software Properties..."
