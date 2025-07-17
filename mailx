@@ -863,6 +863,105 @@ change_domain_hostname() {
     echo "Note: You may need to update your DNS records and SSL certificates."
 }
 
+
+# Function to set custom SMTP port for Postfix
+set_postfix_custom_port() {
+    local current_port=$(postconf -d smtpd_port | awk -F'= ' '{print $2}')
+    local new_port
+    
+    echo "Current Postfix SMTP port: $current_port"
+    echo
+    
+    # Check if port 25 is blocked
+    echo "Testing if port 25 is blocked..."
+    if timeout 5 telnet localhost 25 &>/dev/null; then
+        echo "Port 25 appears to be open. No need to change ports."
+        read -p "Do you still want to change to a custom port? (y/n): " force_change
+        if [[ "$force_change" != "y" ]]; then
+            return 0
+        fi
+    else
+        echo "Port 25 appears to be blocked."
+    fi
+    
+    # Get new port number
+    while true; do
+        read -p "Enter new SMTP port number (recommended 587 or 465): " new_port
+        if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+            if [ "$new_port" -eq 25 ]; then
+                echo "Cannot use port 25 (it's blocked). Please choose another port."
+                continue
+            fi
+            if [ "$new_port" -le 1024 ] && [ "$(id -u)" != "0" ]; then
+                echo "Ports below 1024 require root privileges."
+                continue
+            fi
+            break
+        else
+            echo "Invalid port number. Please enter a number between 1 and 65535."
+        fi
+    done
+    
+    echo
+    echo "Changing Postfix SMTP port from $current_port to $new_port..."
+    
+    # Backup current Postfix configuration
+    echo "Backing up current Postfix configuration..."
+    cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
+    cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
+    
+    # Update master.cf - remove any existing custom port entries
+    echo "Updating Postfix master.cf..."
+    sed -i '/^smtp.*inet.*smtpd/d' /etc/postfix/master.cf
+    sed -i '/^submission.*inet.*smtpd/d' /etc/postfix/master.cf
+    sed -i '/^smtps.*inet.*smtpd/d' /etc/postfix/master.cf
+    
+    # Add new port configuration to master.cf
+    cat <<EOF >> /etc/postfix/master.cf
+# Custom SMTP port
+${new_port}      inet  n       -       y       -       -       smtpd
+  -o syslog_name=postfix/smtp-custom
+  -o smtpd_tls_security_level=may
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_client_restrictions=permit_sasl_authenticated,reject
+EOF
+    
+    # Update main.cf
+    echo "Updating Postfix main.cf..."
+    postconf -e "smtpd_port=$new_port"
+    postconf -e "alternate_smtp_ports=$new_port"
+    
+    # Update Roundcube configuration if exists
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        echo "Updating Roundcube configuration..."
+        sed -i "s/\$config\['smtp_port'\] = .*/\$config\['smtp_port'\] = $new_port;/" /var/www/html/roundcube/config/config.inc.php
+    fi
+    
+    # Update firewall rules
+    if command -v ufw &>/dev/null; then
+        echo "Updating UFW firewall rules..."
+        ufw allow "$new_port"/tcp
+        ufw delete allow 25/tcp 2>/dev/null || true
+    elif command -v firewall-cmd &>/dev/null; then
+        echo "Updating firewalld rules..."
+        firewall-cmd --permanent --add-port="$new_port"/tcp
+        firewall-cmd --permanent --remove-port=25/tcp
+        firewall-cmd --reload
+    fi
+    
+    # Restart Postfix
+    echo "Restarting Postfix..."
+    restart_service postfix
+    
+    echo
+    echo "Postfix SMTP port successfully changed to $new_port"
+    echo "You may need to:"
+    echo "1. Update your DNS records (MX records may need to point to the new port)"
+    echo "2. Update email client configurations"
+    echo "3. Update any firewall rules on your network perimeter"
+    echo "4. Update port forwarding rules if behind NAT"
+}
+
 clear
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
@@ -882,8 +981,9 @@ echo "3. Send a test mail"
 echo "4. Uninstall Roundcube"
 echo "5. Uninstall MailX"
 echo "6. Change Domain"
+echo "7. Change SMTP port"
 
-read -p "Enter your choice (1, 2, 3, 4, 5 or 6): " choice
+read -p "Enter your choice (1, 2, 3, 4, 5, 6 or 7): " choice
 
 
 case $choice in
@@ -994,6 +1094,12 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
     6)
         # Change domain/hostname
         change_domain_hostname
+        ;;
+
+        # In the main menu case statement, add:
+    7)
+        # Set custom SMTP port for Postfix
+        set_postfix_custom_port
         ;;
 
     *)
