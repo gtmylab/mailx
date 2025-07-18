@@ -512,6 +512,9 @@ EOF
     configure_dovecot_quota
     configure_dovecot_sasl
 
+    # After Postfix installation
+    setup_postfix_header_checks "$HOSTNAME"
+
     # 3. Restart services
     systemctl restart dovecot postfix
 
@@ -963,22 +966,29 @@ change_domain_hostname() {
     sed -i "s/$old_domain/$new_domain/g" /etc/postfix/main.cf
     sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/main.cf
     
-    # 5. Update Roundcube configuration
+    # 5. Update header_checks file
+    if [ -f "/etc/postfix/header_checks" ]; then
+        sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/header_checks
+    else
+        setup_postfix_header_checks "$new_hostname"
+    fi
+    
+    # 6. Update Roundcube configuration
     if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
         sed -i "s/$old_domain/$new_domain/g" /var/www/html/roundcube/config/config.inc.php
         sed -i "s/mail_domain'] = .*/mail_domain'] = '$new_domain';/" /var/www/html/roundcube/config/config.inc.php
     fi
     
-    # 6. Update Apache configurations
+    # 7. Update Apache configurations
     for config_file in /etc/apache2/sites-available/*.conf; do
         sed -i "s/$old_domain/$new_domain/g" "$config_file"
         sed -i "s/$old_hostname/$new_hostname/g" "$config_file"
     done
     
-    # 7. Regenerate DKIM keys for new domain
+    # 8. Regenerate DKIM keys for new domain
     generate_dkim
     
-    # 8. Restart services
+    # 9. Restart services
     echo "Restarting services..."
     restart_service postfix
     restart_service dovecot
@@ -993,6 +1003,27 @@ change_domain_hostname() {
     echo "Note: You may need to update your DNS records and SSL certificates."
 }
 
+setup_postfix_header_checks() {
+    local hostname=$1
+    
+    echo "Configuring Postfix header checks..."
+    
+    # Create header_checks file
+    cat <<EOF > /etc/postfix/header_checks
+/^Received: from \S+ \(.*\[.*\]\)/ REPLACE Received: from $hostname (localhost [127.0.0.1])
+/^X-Originating-IP:/ IGNORE
+EOF
+    
+    # Add to main.cf if not already present
+    if ! grep -q "header_checks" /etc/postfix/main.cf; then
+        echo "header_checks = regexp:/etc/postfix/header_checks" >> /etc/postfix/main.cf
+    fi
+    
+    # Set proper permissions
+    chmod 644 /etc/postfix/header_checks
+    
+    echo "Postfix header checks configured successfully."
+}
 
 # Function to set custom SMTP port for Postfix
 set_postfix_custom_port() {
