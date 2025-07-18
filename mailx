@@ -749,24 +749,8 @@ add_roundcube_user() {
     # Roundcube database operations
     local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # Get database version to handle schema differences
-    local DB_VERSION=$(mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -sN -e "SELECT value FROM system WHERE name = 'roundcube-version'")
-
-    if [[ "$DB_VERSION" =~ ^1\. ]]; then
-        # Roundcube 1.x schema
-        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
-INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
-ON DUPLICATE KEY UPDATE last_login=NOW();
-
-SET @user_id = (SELECT user_id FROM users WHERE username = '$email');
-
-INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-VALUES (@user_id, NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
-ON DUPLICATE KEY UPDATE changed=NOW();
-EOF
-    else
-        # Roundcube 2.x+ schema
+    # First try the modern schema (Roundcube 1.4+)
+    if mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -e "DESCRIBE users" | grep -q "user_id"; then
         mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
 INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
 VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
@@ -774,6 +758,17 @@ ON DUPLICATE KEY UPDATE last_login=NOW();
 
 INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
 VALUES ((SELECT user_id FROM users WHERE username = '$email'), NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
+ON DUPLICATE KEY UPDATE changed=NOW();
+EOF
+    else
+        # Fallback to legacy schema (pre-1.4)
+        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
+INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
+ON DUPLICATE KEY UPDATE last_login=NOW();
+
+INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+VALUES ((SELECT id FROM users WHERE username = '$email'), NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
 ON DUPLICATE KEY UPDATE changed=NOW();
 EOF
     fi
