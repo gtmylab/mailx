@@ -282,7 +282,73 @@ generate_dkim() {
     echo "DKIM private key stored at: $KEY_FILE"
 }
 
+configure_dovecot_sasl() {
+    echo "Configuring Dovecot for SASL authentication with Postfix..."
+    
+    # 1. Configure /etc/dovecot/conf.d/10-master.conf
+    echo "Updating 10-master.conf..."
+    cat <<EOF > /etc/dovecot/conf.d/10-master.conf
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+EOF
 
+    # 2. Configure /etc/dovecot/conf.d/10-auth.conf
+    echo "Updating 10-auth.conf..."
+    cat <<EOF > /etc/dovecot/conf.d/10-auth.conf
+disable_plaintext_auth = no
+auth_mechanisms = plain login
+!include auth-system.conf.ext
+EOF
+
+    # 3. Create auth directory and set permissions
+    echo "Creating auth directory and setting permissions..."
+    mkdir -p /var/spool/postfix/private/auth
+    chown -R postfix:postfix /var/spool/postfix/private/auth
+    chmod -R 750 /var/spool/postfix/private/auth
+
+    # 4. Restart services
+    echo "Restarting Dovecot..."
+    systemctl restart dovecot
+
+    # 5. Verify configuration
+    echo "Verifying Dovecot SASL socket..."
+    if [ -S /var/spool/postfix/private/auth ]; then
+        echo "Dovecot SASL socket created successfully:"
+        ls -l /var/spool/postfix/private/auth
+    else
+        echo "Error: SASL socket not created!"
+        exit 1
+    fi
+
+    echo "Dovecot SASL configuration completed successfully."
+}
+
+verify_postfix_dovecot_connection() {
+    echo "Verifying Postfix-Dovecot SASL connection..."
+    if sudo -u postfix ls /var/spool/postfix/private/auth >/dev/null 2>&1; then
+        echo "Postfix can access Dovecot auth socket - configuration OK"
+    else
+        echo "ERROR: Postfix cannot access Dovecot auth socket!"
+        echo "Check permissions on /var/spool/postfix/private/auth"
+        exit 1
+    fi
+}
+
+test_sasl_authentication() {
+    echo "Testing SASL authentication..."
+    echo "auth plain" | nc localhost 587 | grep -q "VXNlcm5hbWU6" && \
+        echo "SASL PLAIN authentication available" || \
+        echo "SASL PLAIN authentication NOT available"
+    
+    echo "auth login" | nc localhost 587 | grep -q "VXNlcm5hbWU6" && \
+        echo "SASL LOGIN authentication available" || \
+        echo "SASL LOGIN authentication NOT available"
+}
 
 # Function to install Roundcube
 install_roundcube() {
@@ -372,7 +438,14 @@ EOF
     echo "[OK]"
 
     configure_dovecot_quota
+
+    configure_dovecot_sasl
+
     restart_dovecot
+    
+    verify_postfix_dovecot_connection
+    test_sasl_authentication
+
 
         # Install opendkim if not installed
     if ! command -v opendkim-genkey &> /dev/null; then
