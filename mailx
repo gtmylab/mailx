@@ -717,81 +717,77 @@ EOF
 
 # Function to add a new Roundcube user
 add_roundcube_user() {
-    #local ROUNDCUBE_DB_PASSWORD=$1
+    local username=$1
+    local password=$2
+    local quota_size=$3
+    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
+    local email="$username@$domain"
+    local MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
-    local username=$1
-    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
-    local password=$2
-    local quota_size=$3  # Quota size in MB
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
-    # Combine username and domain to create full email address
-    email="$username@$domain"
-
-    # Generate encrypted password for Linux user
-    encrypted_password=$(openssl passwd -1 "$password")
-
-    # Check if user already exists
-    if id "$username" >/dev/null 2>&1; then
-        echo "User $username already exists. Aborting."
-        exit 1
+    # Create system user if not exists
+    if ! id "$username" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$username"
+        echo "$username:$password" | chpasswd
+        echo "System user $username created."
     fi
 
-    # Create user account
-    useradd -m -s /bin/bash -p "$encrypted_password" "$username"
-    echo ""
-    echo "User $username created successfully."
+    # Create Maildir
+    mkdir -p "/home/$username/Maildir/"{cur,new,tmp}
+    chown -R "$username:$username" "/home/$username/Maildir"
 
-    # Create Maildir for user
-    mkdir -p /home/$username/Maildir
-    chown -R $username:$username /home/$username/Maildir
-    echo ""
-    echo "Mail directory created for $username."
+    # Configure Dovecot quota
+    echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
+    chown "$username:$username" "/home/$username/.dovecot.quota"
 
-    # Set up quota for the user
-    echo "quota_rule = *:storage=${quota_size}M" >> /home/$username/.dovecot.sieve
+    # Add to Postfix virtual maps
+    echo "$email $username" >> /etc/postfix/virtual
+    postmap /etc/postfix/virtual
 
-    # Retrieve MySQL root and Roundcube DB passwords
-    MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
-    ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    # Roundcube database operations
+    local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # Define the ROUNDCUBE_PREFERENCE variable
-    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+    # Get database version to handle schema differences
+    local DB_VERSION=$(mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -sN -e "SELECT value FROM system WHERE name = 'roundcube-version'")
 
-    # Insert new user and retrieve the auto-incremented ID
-    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
-    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-    SELECT LAST_INSERT_ID();
-    ")
+    if [[ "$DB_VERSION" =~ ^1\. ]]; then
+        # Roundcube 1.x schema
+        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
+INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
+ON DUPLICATE KEY UPDATE last_login=NOW();
 
-    # Check if USER_ID was retrieved successfully
-    if [ -z "$USER_ID" ]; then
-        echo "Failed to retrieve USER_ID. Aborting."
-        exit 1
+SET @user_id = (SELECT user_id FROM users WHERE username = '$email');
+
+INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+VALUES (@user_id, NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
+ON DUPLICATE KEY UPDATE changed=NOW();
+EOF
+    else
+        # Roundcube 2.x+ schema
+        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
+INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
+ON DUPLICATE KEY UPDATE last_login=NOW();
+
+INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+VALUES ((SELECT user_id FROM users WHERE username = '$email'), NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
+ON DUPLICATE KEY UPDATE changed=NOW();
+EOF
     fi
 
-    # Insert into identities table
-    mysql $ROUNDCUBE_DB_NAME -e "
-    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
-    "
-    # Update Postfix configurations
-    update_postfix_virtual "$domain" "$username"
-    update_postfix_maincf "$domain"
+    # Restart services
+    systemctl restart postfix dovecot
 
-    # Restart Postfix to apply changes
-    restart_service postfix
-
-    # Notify user via email
+    # Send welcome email
     send_welcome_email "$email" "$username"
 
-    # Inform user creation details
     echo "==============================================="
-    echo "New Roundcube User Details:"
+    echo "User successfully configured:"
     echo "Email: $email"
     echo "Username: $username"
-    echo "Password: $password"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
