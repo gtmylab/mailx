@@ -722,7 +722,6 @@ add_roundcube_user() {
     local quota_size=$3
     local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local email="$username@$domain"
-    local MYSQL_ROOT_PASSWORD=$(retrieve_file_data /usr/local/mysql_root_pwd.txt)
     local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
@@ -746,32 +745,25 @@ add_roundcube_user() {
     echo "$email $username" >> /etc/postfix/virtual
     postmap /etc/postfix/virtual
 
-    # Roundcube database operations
+    # Roundcube database operations - Universal schema approach
     local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # First try the modern schema (Roundcube 1.4+)
-    if mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -e "DESCRIBE users" | grep -q "user_id"; then
-        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
+    # First insert or update user
+    mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
 INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
 VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
 ON DUPLICATE KEY UPDATE last_login=NOW();
 
-INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-VALUES ((SELECT user_id FROM users WHERE username = '$email'), NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
-ON DUPLICATE KEY UPDATE changed=NOW();
-EOF
-    else
-        # Fallback to legacy schema (pre-1.4)
-        mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
-INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
-ON DUPLICATE KEY UPDATE last_login=NOW();
+SET @user_id = (SELECT CASE 
+    WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'user_id') 
+    THEN (SELECT user_id FROM users WHERE username = '$email')
+    ELSE (SELECT id FROM users WHERE username = '$email')
+END AS id);
 
 INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-VALUES ((SELECT id FROM users WHERE username = '$email'), NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
+VALUES (@user_id, NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
 ON DUPLICATE KEY UPDATE changed=NOW();
 EOF
-    fi
 
     # Restart services
     systemctl restart postfix dovecot
