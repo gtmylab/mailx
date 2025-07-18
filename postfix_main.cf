@@ -54,3 +54,14 @@ smtp_recipient_limit = 1000
 default_process_limit = 100
 smtp_connection_cache_on_demand = no
 smtp_connection_cache_time_limit = 2s
+
+# Hide original client IP and show only your mail server's IP
+smtpd_client_restrictions = permit_mynetworks, reject
+smtpd_proxy_options = speed_adjust
+local_header_rewrite_clients = permit_mynetworks
+smtpd_sender_login_maps = hash:/etc/postfix/virtual
+
+# Set proper HELO/EHLO name
+smtpd_helo_required = yes
+smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname
+
