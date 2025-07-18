@@ -745,25 +745,26 @@ add_roundcube_user() {
     echo "$email $username" >> /etc/postfix/virtual
     postmap /etc/postfix/virtual
 
-    # Roundcube database operations - Universal schema approach
-    local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+    # Define the ROUNDCUBE_PREFERENCE variable
+    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # First insert or update user
-    mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" <<EOF
-INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE')
-ON DUPLICATE KEY UPDATE last_login=NOW();
+    # Insert new user and retrieve the auto-incremented ID
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
+    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+    SELECT LAST_INSERT_ID();
+    ")
 
-SET @user_id = (SELECT CASE 
-    WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'user_id') 
-    THEN (SELECT user_id FROM users WHERE username = '$email')
-    ELSE (SELECT id FROM users WHERE username = '$email')
-END AS id);
+    # Check if USER_ID was retrieved successfully
+    if [ -z "$USER_ID" ]; then
+        echo "Failed to retrieve USER_ID. Aborting."
+        exit 1
+    fi
 
-INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-VALUES (@user_id, NOW(), 0, 1, '$username', 'localhost', '$email', '$email', '', 1)
-ON DUPLICATE KEY UPDATE changed=NOW();
-EOF
+    # Insert into identities table
+    mysql $ROUNDCUBE_DB_NAME -e "
+    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
+    "
 
     # Restart services
     systemctl restart postfix dovecot
