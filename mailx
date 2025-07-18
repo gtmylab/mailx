@@ -285,47 +285,59 @@ generate_dkim() {
 configure_dovecot_sasl() {
     echo "Configuring Dovecot for SASL authentication with Postfix..."
     
-    # 1. Configure /etc/dovecot/conf.d/10-master.conf
+    # 1. Backup original files
+    cp /etc/dovecot/conf.d/10-master.conf /etc/dovecot/conf.d/10-master.conf.bak
+    cp /etc/dovecot/conf.d/10-auth.conf /etc/dovecot/conf.d/10-auth.conf.bak
+
+    # 2. Configure /etc/dovecot/conf.d/10-master.conf (preserve existing content)
     echo "Updating 10-master.conf..."
-    cat <<EOF > /etc/dovecot/conf.d/10-master.conf
-service auth {
+    if ! grep -q "unix_listener /var/spool/postfix/private/auth" /etc/dovecot/conf.d/10-master.conf; then
+        # Insert our auth configuration while preserving existing content
+        sed -i '/^service auth {/!b;:a;n;/^}/!ba;r /dev/stdin' /etc/dovecot/conf.d/10-master.conf <<EOF
   unix_listener /var/spool/postfix/private/auth {
     mode = 0660
     user = postfix
     group = postfix
   }
-}
 EOF
+    fi
 
-    # 2. Configure /etc/dovecot/conf.d/10-auth.conf
+    # 3. Configure /etc/dovecot/conf.d/10-auth.conf
     echo "Updating 10-auth.conf..."
     cat <<EOF > /etc/dovecot/conf.d/10-auth.conf
+# Authentication configuration
 disable_plaintext_auth = no
 auth_mechanisms = plain login
 !include auth-system.conf.ext
 EOF
 
-    # 3. Create auth directory and set permissions
+    # 4. Create auth directory and set permissions
     echo "Creating auth directory and setting permissions..."
     mkdir -p /var/spool/postfix/private/auth
-    chown -R postfix:postfix /var/spool/postfix/private/auth
-    chmod -R 750 /var/spool/postfix/private/auth
+    chown -R postfix:postfix /var/spool/postfix/private
+    chmod -R 0750 /var/spool/postfix/private
 
-    # 4. Restart services
+    # 5. Fix potential socket file conflict
+    if [ -S /var/spool/postfix/private/auth ]; then
+        echo "Removing existing auth socket file..."
+        rm -f /var/spool/postfix/private/auth
+    fi
+
+    # 6. Restart services
     echo "Restarting Dovecot..."
     systemctl restart dovecot
 
-    # 5. Verify configuration
+    # 7. Verify configuration
     echo "Verifying Dovecot SASL socket..."
     if [ -S /var/spool/postfix/private/auth ]; then
         echo "Dovecot SASL socket created successfully:"
         ls -l /var/spool/postfix/private/auth
+        echo "Dovecot SASL configuration completed successfully."
     else
-        echo "Error: SASL socket not created!"
+        echo "Error: SASL socket not created! Checking logs..."
+        journalctl -u dovecot -n 20 --no-pager
         exit 1
     fi
-
-    echo "Dovecot SASL configuration completed successfully."
 }
 
 verify_postfix_dovecot_connection() {
@@ -437,12 +449,14 @@ EOF
     apt_install postfix mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql -y
     echo "[OK]"
 
+    # 2. Configure Dovecot
     configure_dovecot_quota
-
     configure_dovecot_sasl
 
-    restart_dovecot
-    
+    # 3. Restart services
+    systemctl restart dovecot postfix
+
+    # 4. Verify
     verify_postfix_dovecot_connection
     test_sasl_authentication
 
