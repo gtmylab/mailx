@@ -611,25 +611,33 @@ echo "Installing additional Mailing Support..."
 
     # Configure Apache for SSL LetsEncrypt
     cat <<EOF > /etc/apache2/sites-available/apachessl.conf
-    <VirtualHost *:80>
-        ServerName $HOSTNAME
-        DocumentRoot /var/www/html/apachessl
+<VirtualHost *:80>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/apachessl
 
-        <Directory /var/www/html/apachessl/>
-            Options +FollowSymlinks
-            AllowOverride All
-            <IfModule mod_dir.c>
-                DirectoryIndex index.php
-            </IfModule>
-        </Directory>
+    # Add this section for ACME challenges
+    Alias /.well-known/acme-challenge /var/www/html/apachessl/.well-known/acme-challenge
+    <Directory /var/www/html/apachessl/.well-known/acme-challenge>
+        AllowOverride None
+        Options None
+        Require all granted
+    </Directory>
 
-        <FilesMatch \.php$>
-            SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
-         </FilesMatch>
+    <Directory /var/www/html/apachessl/>
+        Options +FollowSymlinks
+        AllowOverride All
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
 
-        ErrorLog \${APACHE_LOG_DIR}/apachessl_error.log
-        CustomLog \${APACHE_LOG_DIR}/apachessl_access.log combined
-    </VirtualHost>
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+     </FilesMatch>
+
+    ErrorLog ${APACHE_LOG_DIR}/apachessl_error.log
+    CustomLog ${APACHE_LOG_DIR}/apachessl_access.log combined
+</VirtualHost>
 EOF
 
     # Configure Apache for Roundcube
