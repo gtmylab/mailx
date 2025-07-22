@@ -538,7 +538,7 @@ cp /etc/apache2/ports.conf /etc/apache2/ports.conf.bak
 wget -qO /etc/apache2/ports.conf https://raw.githubusercontent.com/gtmylab/mailx/main/apache2/ports.conf
 
 # Install PHP 8.1 and PHP 5.6 with FPM and required extensions
-echo "Installing PHP 8.1, PHP 8.4 and PHP 5.6..."
+echo "Installing PHP 8.1, PHP 8.3, PHP 8.4 and PHP 5.6..."
 apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell
 apt_install php8.3 php8.3-fpm php8.3-cli php8.3-common php8.3-curl php8.3-mysql php8.3-xml php8.3-mbstring php8.3-zip php8.3-intl php8.3-pspell
 apt_install php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl php8.4-mysql php8.4-xml php8.4-mbstring php8.4-zip php8.4-intl php8.4-pspell
@@ -604,6 +604,28 @@ echo "Installing additional Mailing Support..."
     chown -R www-data:www-data /var/www/html/adminportal
     echo "[OK]"
 
+    # Configure Apache for SSL LetsEncrypt
+    cat <<EOF > /etc/apache2/sites-available/apachessl.conf
+    <VirtualHost *:80>
+        ServerName $HOSTNAME
+        DocumentRoot /var/www/html/apachessl
+
+        <Directory /var/www/html/apachessl/>
+            Options +FollowSymlinks
+            AllowOverride All
+            <IfModule mod_dir.c>
+                DirectoryIndex index.php
+            </IfModule>
+        </Directory>
+
+        <FilesMatch \.php$>
+            SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+         </FilesMatch>
+
+        ErrorLog \${APACHE_LOG_DIR}/apachessl_error.log
+        CustomLog \${APACHE_LOG_DIR}/apachessl_access.log combined
+    </VirtualHost>
+EOF
 
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
@@ -957,16 +979,21 @@ manage_ssl_certificates() {
 
     case "$action" in
         install)
-            echo "Installing Let's Encrypt SSL certificate for $domain..."
             
             # Install certbot if not exists
             if ! command -v certbot &> /dev/null; then
-                apt-get update
-                apt-get install -y certbot python3-certbot-apache
+             echo "Installing packages needed for Let's Encrypt SSL certificate..."
+            echo "."
+            echo ".."
+            echo "..."
+            echo "....please wait...."
+            apt-get -qq update > /dev/null
+                apt_install certbot python3-certbot-apache
             fi
 
             # Create webroot if not exists
             mkdir -p "$webroot/.well-known/acme-challenge"
+            echo "Installing Let's Encrypt SSL certificate for $domain..."
 
             # Obtain certificate
             certbot certonly --webroot -w "$webroot" -d "$domain" -d "mail.$domain" \
