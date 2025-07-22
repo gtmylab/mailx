@@ -975,7 +975,7 @@ send_welcome_email() {
 manage_ssl_certificates() {
     local action=$1
     local domain=${2:-$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)}
-    local webroot="/var/www/html"
+    local webroot="/var/www/html/apachessl"
 
     case "$action" in
         install)
@@ -1006,6 +1006,8 @@ manage_ssl_certificates() {
             
             # Setup automatic renewal
             setup_ssl_renewal
+            echo "[OK]"
+
             ;;
 
         renew)
