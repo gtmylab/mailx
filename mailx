@@ -773,7 +773,8 @@ EOF
 
 
     manage_ssl_certificates install $HOSTNAME
-
+    sudo a2enmod ssl
+    sudo a2enmod headers rewrite
     systemctl restart apache2
     systemctl reload apache2
 
