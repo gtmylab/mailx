@@ -604,6 +604,11 @@ echo "Installing additional Mailing Support..."
     chown -R www-data:www-data /var/www/html/adminportal
     echo "[OK]"
 
+
+    mkdir -p  /var/www/html/apachessl
+    chown -R www-data:www-data /var/www/html/apachessl
+    echo "[OK]"
+
     # Configure Apache for SSL LetsEncrypt
     cat <<EOF > /etc/apache2/sites-available/apachessl.conf
     <VirtualHost *:80>
@@ -722,7 +727,10 @@ EOF
     # Disable old PHP version and enable PHP 8.1
     a2enmod php8.1 > /dev/null 2>&1
     systemctl restart apache2
-    
+    echo "Enabling site SSL..."
+    a2ensite apachessl.conf > /dev/null 2>&1
+    echo "Enabling site AdminPortal Site..."
+    a2ensite adminportal.conf > /dev/null 2>&1
     echo "[OK]"
     # Enable the sites and restart Apache
     echo "Enabling site roundcube..."
@@ -737,6 +745,7 @@ EOF
         # Download and install Phpmyadmin
     setup_phpmyadmin
     echo "[OK]"
+    systemctl reload apache2
     systemctl restart apache2
 
     manage_ssl_certificates install $HOSTNAME
