@@ -641,25 +641,67 @@ EOF
 
     # Configure Apache for Admin Portal
     cat <<EOF > /etc/apache2/sites-available/adminportal.conf
-    <VirtualHost *:9090>
-        ServerName $HOSTNAME
-        DocumentRoot /var/www/html/adminportal
+# Non-SSL Admin Portal (Port 9090)
+<VirtualHost *:9090>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/adminportal
 
-        <Directory /var/www/html/adminportal/>
-            Options +FollowSymlinks
-            AllowOverride All
-            <IfModule mod_dir.c>
-                DirectoryIndex index.php
-            </IfModule>
-        </Directory>
+    <Directory /var/www/html/adminportal/>
+        Options +FollowSymLinks -Indexes
+        AllowOverride All
+        Require all granted
+        
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
 
-        <FilesMatch \.php$>
-            SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
-         </FilesMatch>
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
+    </FilesMatch>
 
-        ErrorLog \${APACHE_LOG_DIR}/adminportal_error.log
-        CustomLog \${APACHE_LOG_DIR}/adminportal_access.log combined
-    </VirtualHost>
+    ErrorLog ${APACHE_LOG_DIR}/adminportal_error.log
+    CustomLog ${APACHE_LOG_DIR}/adminportal_access.log combined
+</VirtualHost>
+
+# SSL Admin Portal (Port 8443)
+<VirtualHost *:8443>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/adminportal
+
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/$HOSTNAME/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/$HOSTNAME/privkey.pem
+    SSLCertificateChainFile /etc/letsencrypt/live/$HOSTNAME/chain.pem
+
+    # Security Headers
+    Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+
+    # Disable weak protocols
+    SSLProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite HIGH:!aNULL:!MD5:!SHA1
+    SSLHonorCipherOrder on
+
+    <Directory /var/www/html/adminportal/>
+        Options +FollowSymLinks -Indexes
+        AllowOverride All
+        Require all granted
+        
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+
+    ErrorLog ${APACHE_LOG_DIR}/adminportal_ssl_error.log
+    CustomLog ${APACHE_LOG_DIR}/adminportal_ssl_access.log combined
+</VirtualHost>
 EOF
 
     # Configure Apache for Mailx
