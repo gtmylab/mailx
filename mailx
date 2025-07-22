@@ -751,7 +751,7 @@ EOF
 EOF
     # Disable old PHP version and enable PHP 8.1
     a2enmod php8.1 > /dev/null 2>&1
-    systemctl restart apache2
+    #systemctl restart apache2
     echo "Enabling site SSL..."
     #a2ensite apachessl.conf > /dev/null 2>&1
     echo "Enabling site AdminPortal Site..."
@@ -770,10 +770,12 @@ EOF
         # Download and install Phpmyadmin
     setup_phpmyadmin
     echo "[OK]"
-    systemctl reload apache2
-    systemctl restart apache2
+
 
     manage_ssl_certificates install $HOSTNAME
+
+    systemctl restart apache2
+    systemctl reload apache2
 
     systemctl restart apache2
     # Download and install Roundcube
