@@ -531,15 +531,18 @@ EOF
     fi
     echo "Installing Apache (web server)..."
     echo "[OK]"
-    apt_install apache2 libapache2-mod-fcgid libapache2-mod-php8.1 libapache2-mod-fcgid
+    apt_install apache2 libapache2-mod-fcgid libapache2-mod-php8.1 libapache2-mod-php8.4 libapache2-mod-fcgid
 
         # Backup original configuration files
 cp /etc/apache2/ports.conf /etc/apache2/ports.conf.bak
 wget -qO /etc/apache2/ports.conf https://raw.githubusercontent.com/gtmylab/mailx/main/apache2/ports.conf
 
 # Install PHP 8.1 and PHP 5.6 with FPM and required extensions
-echo "Installing PHP 8.1 and PHP 5.6..."
+echo "Installing PHP 8.1, PHP 8.4 and PHP 5.6..."
 apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell
+apt_install php8.3 php8.3-fpm php8.3-cli php8.3-common php8.3-curl php8.3-mysql php8.3-xml php8.3-mbstring php8.3-zip php8.3-intl php8.3-pspell
+apt_install php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl php8.4-mysql php8.4-xml php8.4-mbstring php8.4-zip php8.4-intl php8.4-pspell
+
 apt_install php5.6 php5.6-fpm php5.6-cli php5.6-common php5.6-curl php5.6-mysql php5.6-xml php5.6-mbstring php5.6-zip php5.6-intl php5.6-pspell
 
 # Enable required Apache modules
@@ -553,11 +556,28 @@ if [ -z "$PHPFPM_SERVICE" ]; then
     echo "PHP 8.1 FPM service not found. Please check your PHP installation."
     exit 1
 fi
+# Check PHP-FPM service name for PHP 8.3
+PHPFPM_SERVICE=$(systemctl list-units --full --all | grep php8.3-fpm | awk '{print $1}')
+if [ -z "$PHPFPM_SERVICE" ]; then
+    echo "PHP 8.3 FPM service not found. Please check your PHP installation."
+    exit 1
+fi
+# Check PHP-FPM service name for PHP 8.4
+PHPFPM_SERVICE=$(systemctl list-units --full --all | grep php8.4-fpm | awk '{print $1}')
+if [ -z "$PHPFPM_SERVICE" ]; then
+    echo "PHP 8.4 FPM service not found. Please check your PHP installation."
+    exit 1
+fi
 
 # Configure PHP-FPM for PHP 8.1
 mkdir -p /etc/php/8.1/fpm/pool.d
+mkdir -p /etc/php/8.3/fpm/pool.d
+mkdir -p /etc/php/8.4/fpm/pool.d
 mkdir -p /etc/php/5.6/fpm/pool.d
 wget -qO /etc/php/8.1/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/www.conf
+wget -qO /etc/php/8.3/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/3/www.conf
+wget -qO /etc/php/8.4/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/4/www.conf
+
 # Configure PHP-FPM for PHP 5.6
 wget -qO /etc/php/5.6/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php5/www.conf
 
@@ -569,6 +589,8 @@ update_php_ini "max_input_time" "$MAX_INPUT_TIME" "$PHP_INI_FILE"
 update_php_ini "memory_limit" "$MEMORY_LIMIT" "$PHP_INI_FILE"
 
 sudo systemctl restart php8.1-fpm 2>/dev/null
+sudo systemctl restart php8.3-fpm 2>/dev/null
+sudo systemctl restart php8.4-fpm 2>/dev/null
 sudo systemctl restart php5.6-fpm 2>/dev/null
 
 echo "Installing additional Mailing Support..."
@@ -577,6 +599,11 @@ echo "Installing additional Mailing Support..."
     wget -qO  /var/www/html/mailx/index.php https://raw.githubusercontent.com/gtmylab/mailx/main/mailer.php
     chown -R www-data:www-data /var/www/html/mailx
     echo "[OK]"
+
+    mkdir -p  /var/www/html/adminportal
+    chown -R www-data:www-data /var/www/html/adminportal
+    echo "[OK]"
+
 
     # Configure Apache for Roundcube
     cat <<EOF > /etc/apache2/sites-available/roundcube.conf
@@ -598,6 +625,30 @@ echo "Installing additional Mailing Support..."
 
         ErrorLog \${APACHE_LOG_DIR}/roundcube_error.log
         CustomLog \${APACHE_LOG_DIR}/roundcube_access.log combined
+    </VirtualHost>
+EOF
+
+
+    # Configure Apache for Admin Portal
+    cat <<EOF > /etc/apache2/sites-available/adminportal.conf
+    <VirtualHost *:9090>
+        ServerName $HOSTNAME
+        DocumentRoot /var/www/html/adminportal
+
+        <Directory /var/www/html/adminportal/>
+            Options +FollowSymlinks
+            AllowOverride All
+            <IfModule mod_dir.c>
+                DirectoryIndex index.php
+            </IfModule>
+        </Directory>
+
+        <FilesMatch \.php$>
+            SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
+         </FilesMatch>
+
+        ErrorLog \${APACHE_LOG_DIR}/adminportal_error.log
+        CustomLog \${APACHE_LOG_DIR}/adminportal_access.log combined
     </VirtualHost>
 EOF
 
@@ -666,6 +717,9 @@ EOF
     echo "[OK]"
     systemctl restart apache2
 
+    manage_ssl_certificates install $HOSTNAME
+
+    systemctl restart apache2
     # Download and install Roundcube
     echo "Downloading and installing Roundcube..."
     cd /var/www/html
@@ -895,6 +949,111 @@ send_welcome_email() {
 }
 
 
+# Function to manage Let's Encrypt SSL certificates
+manage_ssl_certificates() {
+    local action=$1
+    local domain=${2:-$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)}
+    local webroot="/var/www/html"
+
+    case "$action" in
+        install)
+            echo "Installing Let's Encrypt SSL certificate for $domain..."
+            
+            # Install certbot if not exists
+            if ! command -v certbot &> /dev/null; then
+                apt-get update
+                apt-get install -y certbot python3-certbot-apache
+            fi
+
+            # Create webroot if not exists
+            mkdir -p "$webroot/.well-known/acme-challenge"
+
+            # Obtain certificate
+            certbot certonly --webroot -w "$webroot" -d "$domain" -d "mail.$domain" \
+                --non-interactive --agree-tos \
+                --email admin@$domain \
+                --keep-until-expiring
+            
+            # Configure Postfix/Dovecot to use the cert
+            configure_ssl_services "$domain"
+            
+            # Setup automatic renewal
+            setup_ssl_renewal
+            ;;
+
+        renew)
+            echo "Renewing SSL certificates..."
+            certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"
+            ;;
+
+        change)
+            local new_domain=$2
+            if [[ -z "$new_domain" ]]; then
+                echo "Error: New domain not specified"
+                return 1
+            fi
+            
+            echo "Changing SSL certificate from $domain to $new_domain..."
+            
+            # Obtain new certificate
+            certbot certonly --webroot -w "$webroot" -d "$new_domain" -d "mail.$new_domain" \
+                --non-interactive --agree-tos \
+                --email admin@$new_domain \
+                --keep-until-expiring \
+                --force-renewal
+            
+            # Update services
+            configure_ssl_services "$new_domain"
+            ;;
+
+        *)
+            echo "Usage: manage_ssl_certificates [install|renew|change newdomain.com]"
+            return 1
+            ;;
+    esac
+}
+
+# Helper function to configure services to use SSL
+configure_ssl_services() {
+    local domain=$1
+    local cert_path="/etc/letsencrypt/live/$domain"
+    
+    echo "Configuring services to use SSL certificate for $domain..."
+    
+    # Apache configuration
+    sed -i "s|SSLCertificateFile.*|SSLCertificateFile $cert_path/fullchain.pem|" /etc/apache2/sites-available/default-ssl.conf
+    sed -i "s|SSLCertificateKeyFile.*|SSLCertificateKeyFile $cert_path/privkey.pem|" /etc/apache2/sites-available/default-ssl.conf
+    
+    # Postfix configuration
+    postconf -e "smtpd_tls_cert_file=$cert_path/fullchain.pem"
+    postconf -e "smtpd_tls_key_file=$cert_path/privkey.pem"
+    
+    # Dovecot configuration
+    sed -i "s|ssl_cert =.*|ssl_cert = <$cert_path/fullchain.pem|" /etc/dovecot/conf.d/10-ssl.conf
+    sed -i "s|ssl_key =.*|ssl_key = <$cert_path/privkey.pem|" /etc/dovecot/conf.d/10-ssl.conf
+    
+    # Restart services
+    systemctl restart apache2 postfix dovecot
+}
+
+# Setup automatic renewal
+setup_ssl_renewal() {
+    # Create renewal script
+    cat << 'EOF' > /usr/local/bin/ssl_renewal.sh
+#!/bin/bash
+certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"
+EOF
+    
+    chmod +x /usr/local/bin/ssl_renewal.sh
+    
+    # Add cron job (runs daily at 3am, checks 5 days before expiry)
+    (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/ssl_renewal.sh") | crontab -
+    
+    echo "Automatic SSL renewal configured."
+}
+
+
+
 # Function to send welcome email to user
 send_test_message() {
 
@@ -994,6 +1153,9 @@ change_domain_hostname() {
     restart_service dovecot
     restart_service apache2
     restart_service opendkim
+
+    manage_ssl_certificates change "$new_domain"
+
     
     echo
     echo "Domain and hostname changed successfully!"
