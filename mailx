@@ -773,12 +773,12 @@ EOF
 
 
     manage_ssl_certificates install $HOSTNAME
-
     sudo a2enmod ssl
     sudo a2enmod headers rewrite
     systemctl restart apache2
     systemctl reload apache2
 
+systemctl restart apache2 postfix dovecot
     systemctl restart apache2
     # Download and install Roundcube
     echo "Downloading and installing Roundcube..."
@@ -1101,6 +1101,7 @@ configure_ssl_services() {
 
     # Restart services
     systemctl restart apache2 postfix dovecot
+    #systemctl restart apache2 postfix dovecot
 }
 
 # Setup automatic renewal
