@@ -287,7 +287,7 @@ configure_dovecot_sasl() {
     echo "=== COMPREHENSIVE DOVECOT CONFIGURATION ==="
 
     # 1. Install required packages
-    apt-get install -y dovecot-sieve dovecot-managesieved sasl2-bin
+    apt_install dovecot-sieve dovecot-managesieved sasl2-bin
 
     # 2. Create vmail user if not exists
     if ! id vmail >/dev/null 2>&1; then
