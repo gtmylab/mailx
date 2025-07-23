@@ -897,8 +897,15 @@ add_roundcube_user() {
     fi
 
     # Create system user (for authentication)
-    useradd -r -u 5000 -g 5000 -d "$maildir" -s /bin/false "$username"
-    echo "$username:$password" | chpasswd
+  #  useradd -r -u 5000 -g 5000 -d "$maildir" -s /bin/false "$username"
+   # echo "$username:$password" | chpasswd
+
+       # Create system user if not exists
+    if ! id "$username" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$username"
+        echo "$username:$password" | chpasswd
+        echo "System user $username created."
+    fi
 
     # Create mail directory
     mkdir -p "$maildir/"{cur,new,tmp}
