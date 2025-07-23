@@ -288,7 +288,7 @@ configure_dovecot_sasl() {
     echo "Performing Comprehensive Dovecot Configuration Installation"
     
     # 1. Install required packages
-    apt_install  install -y dovecot-sieve dovecot-managesieved sasl2-bin
+    apt_install dovecot-sieve dovecot-managesieved sasl2-bin
       echo "[OK]"
     echo "Configuring Dovecot services..."
 
