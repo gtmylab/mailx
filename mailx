@@ -841,6 +841,7 @@ add_roundcube_user() {
     local default_domain="${domains[0]}"
     local selected_domain="$default_domain"
     local email
+    local maildir_path
     
     # Domain selection logic
     if [[ -n "$domain_input" ]]; then
@@ -854,32 +855,47 @@ add_roundcube_user() {
     fi
 
     email="$username@$selected_domain"
+    maildir_path="/var/mail/vhosts/$selected_domain/$username"
 
     # Check for duplicate user
-    if grep -q "^$email" /etc/postfix/virtual; then
-        echo "Error: Email $email already exists."
+    if [ -f "/etc/postfix/virtual" ] && grep -q "^$email" /etc/postfix/virtual; then
+        echo "Error: Email $email already exists in Postfix virtual maps."
         return 1
     fi
 
+    # Create domain directory if it doesn't exist
+    if [ ! -d "/var/mail/vhosts/$selected_domain" ]; then
+        mkdir -p "/var/mail/vhosts/$selected_domain"
+        chown vmail:vmail "/var/mail/vhosts/$selected_domain"
+        chmod 770 "/var/mail/vhosts/$selected_domain"
+    fi
+
+    # Create system user if not exists
     if id "$username" >/dev/null 2>&1; then
         echo "Warning: System user $username already exists (will be reused)."
     else
-        # Create system user with secure home directory
-        useradd -m -s /bin/bash -d "/var/mail/vhosts/$selected_domain/$username" "$username"
+        # Create user with proper home directory first
+        useradd -m -s /bin/bash -d "$maildir_path" "$username"
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to create system user $username"
+            return 1
+        fi
         echo "$username:$password" | chpasswd
         echo "Created system user $username"
     fi
 
     # Create mail directory structure
-    mkdir -p "/var/mail/vhosts/$selected_domain/$username/"{cur,new,tmp,.cache}
-    chown -R vmail:vmail "/var/mail/vhosts/$selected_domain/$username"
-    chmod -R 770 "/var/mail/vhosts/$selected_domain/$username"
+    mkdir -p "$maildir_path/"{cur,new,tmp,.cache}
+    chown -R vmail:vmail "$maildir_path"
+    chown -R "$username:$username" "$maildir_path"  # Also ensure user has access
+    chmod -R 770 "$maildir_path"
 
     # Set quota
-    echo "quota_rule = *:storage=${quota_size}M" > "/var/mail/vhosts/$selected_domain/$username/.dovecot.quota"
-    chown vmail:vmail "/var/mail/vhosts/$selected_domain/$username/.dovecot.quota"
+    echo "quota_rule = *:storage=${quota_size}M" > "$maildir_path/.dovecot.quota"
+    chown vmail:vmail "$maildir_path/.dovecot.quota"
 
-    # Update Postfix virtual maps
+    # Update Postfix virtual maps (create file if doesn't exist)
+    touch /etc/postfix/virtual
     echo "$email $username" >> /etc/postfix/virtual
     postmap /etc/postfix/virtual
 
@@ -888,19 +904,19 @@ add_roundcube_user() {
     local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
     # Check if user already exists in database
-    local existing_user=$(mysql roundcubemail -sNe "SELECT username FROM users WHERE username = '$email'")
+    local existing_user=$(mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -sNe "SELECT username FROM users WHERE username = '$email'" 2>/dev/null)
     if [ -n "$existing_user" ]; then
         echo "Warning: User $email already exists in Roundcube database (updating instead)."
-        mysql roundcubemail -e "UPDATE users SET mail_host='localhost', preferences='$ROUNDCUBE_PREFERENCE' WHERE username='$email'"
+        mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "UPDATE users SET mail_host='localhost', preferences='$ROUNDCUBE_PREFERENCE' WHERE username='$email'"
     else
-        mysql roundcubemail -e "
+        mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
         INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
         VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
         "
     fi
 
     # Update identities
-    mysql roundcubemail -e "
+    mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
     INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
     SELECT user_id, NOW(), 0, 1, '$username', '$selected_domain', '$email', '$email', '', 1 
     FROM users WHERE username = '$email'
@@ -915,9 +931,11 @@ add_roundcube_user() {
     echo "Username:     $username"
     echo "Domain:       $selected_domain"
     echo "Quota:        ${quota_size}MB"
-    echo "Maildir:      /var/mail/vhosts/$selected_domain/$username"
+    echo "Maildir:      $maildir_path"
     echo "==============================================="
+    return 0
 }
+
 
 
 # Function to uninstall Roundcube, including database and user
