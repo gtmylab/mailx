@@ -85,7 +85,7 @@ configure_dovecot_quota() {
 
             # Enable maildir format
         # Define the new mail_location setting
-        new_mail_location="mbox:~/mail:INBOX=/var/mail/%u"
+        new_mail_location="mbox:~/mail:INBOX=/var/mail/vhosts/%d/%n"
 
         # Escape forward slashes for sed
         escaped_mail_location=$(echo "$new_mail_location" | sed 's/\//\\\//g')
@@ -284,11 +284,14 @@ generate_dkim() {
 
 
 configure_dovecot_sasl() {
-    echo "=== COMPREHENSIVE DOVECOT CONFIGURATION ==="
+    
+    echo "Performing Comprehensive Dovecot Configuration Installation"
     
     # 1. Install required packages
-    apt-get install -y dovecot-sieve dovecot-managesieved sasl2-bin
-    
+    apt_install  install -y dovecot-sieve dovecot-managesieved sasl2-bin
+      echo "[OK]"
+    echo "Configuring Dovecot services..."
+
     # 2. Create vmail user if not exists
     if ! id vmail >/dev/null 2>&1; then
         echo "Creating vmail user..."
@@ -307,7 +310,6 @@ configure_dovecot_sasl() {
     [ -e /var/spool/postfix/private/auth ] && rm -rf /var/spool/postfix/private/auth
     
     # 5. Configure 10-master.conf with root auth-worker (temporary)
-    echo "Configuring Dovecot services..."
     cat <<EOF > /etc/dovecot/conf.d/10-master.conf
 service auth {
   unix_listener /var/spool/postfix/private/auth {
@@ -354,16 +356,46 @@ EOF
     cat <<EOF > /etc/dovecot/conf.d/10-auth.conf
 disable_plaintext_auth = no
 auth_mechanisms = plain login
+auth_username_format = %n
+
 !include auth-system.conf.ext
+!include auth-sql.conf.ext
 EOF
 
     # 7. Mail location configuration
     cat <<EOF > /etc/dovecot/conf.d/10-mail.conf
-mail_location = maildir:~/Maildir
+mail_location = maildir:/var/mail/vhosts/%d/%n
 namespace inbox {
   inbox = yes
 }
 EOF
+
+    # Configure SQL authentication
+    cat <<EOF > /etc/dovecot/conf.d/auth-sql.conf.ext
+passdb {
+    driver = sql
+    args = /etc/dovecot/dovecot-sql.conf.ext
+}
+userdb {
+    driver = sql
+    args = /etc/dovecot/dovecot-sql.conf.ext
+}
+EOF
+
+    # Configure SQL connection
+    local db_password=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    cat <<EOF > /etc/dovecot/dovecot-sql.conf.ext
+driver = mysql
+connect = host=localhost dbname=roundcubemail user=roundcube password=$db_password
+default_pass_scheme = SHA512-CRYPT
+password_query = SELECT username AS user, password FROM users WHERE username = '%u'
+user_query = SELECT mail_host AS home, username AS user, 5000 AS uid, 5000 AS gid FROM users WHERE username = '%u'
+EOF
+
+    chgrp dovecot /etc/dovecot/dovecot-sql.conf.ext
+    chmod 640 /etc/dovecot/dovecot-sql.conf.ext
+
+echo "[OK]"
 
     # 8. Validate configuration
     echo "Validating configuration..."
@@ -395,6 +427,7 @@ EOF
 
     # 11. Restart Postfix
     systemctl restart postfix
+systemctl restart dovecot
 
     echo "=== DOVECOT CONFIGURATION COMPLETE ==="
 }
@@ -831,9 +864,107 @@ systemctl restart apache2 postfix dovecot
 
 }
 
+
+# Function to add email user with proper integration
+add_roundcube_user() {
+    local username=$1
+    local password=$2
+    local quota=${3:-1000}  # Default 1GB quota
+    local domain_input=$4
+
+    # Get available domains
+    local domains=($(cat /usr/local/roundcube_mail_domain.txt))
+    local default_domain="${domains[0]}"
+    local selected_domain="$default_domain"
+
+    # Domain selection
+    if [[ -n "$domain_input" ]]; then
+        if [[ " ${domains[@]} " =~ " ${domain_input} " ]]; then
+            selected_domain="$domain_input"
+        else
+            echo "Error: Domain not configured. Available domains: ${domains[@]}"
+            return 1
+        fi
+    fi
+
+    local email="$username@$selected_domain"
+    local maildir="/var/mail/vhosts/$selected_domain/$username"
+
+    # Check for existing user
+    if grep -q "^$email" /etc/postfix/virtual 2>/dev/null; then
+        echo "Error: User $email already exists"
+        return 1
+    fi
+
+    # Create system user (for authentication)
+    useradd -r -u 5000 -g 5000 -d "$maildir" -s /bin/false "$username"
+    echo "$username:$password" | chpasswd
+
+    # Create mail directory
+    mkdir -p "$maildir/"{cur,new,tmp}
+    chown -R vmail:vmail "$maildir"
+    chmod -R 770 "$maildir"
+
+    # Set quota
+    echo "quota_rule = *:storage=${quota}M" > "$maildir/.dovecot.quota"
+    chown vmail:vmail "$maildir/.dovecot.quota"
+
+    # Update Postfix maps
+    echo "$email $username" >> /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+
+    # Add to Roundcube database
+    local db_password=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    local prefs='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+
+    mysql -u roundcube -p"$db_password" roundcubemail <<EOF
+INSERT INTO users (username, mail_host, created, last_login, language, preferences)
+VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$prefs')
+ON DUPLICATE KEY UPDATE preferences='$prefs';
+
+INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature)
+SELECT user_id, NOW(), 0, 1, '$username', '$selected_domain', '$email', '$email', '', 1
+FROM users WHERE username = '$email'
+ON DUPLICATE KEY UPDATE name='$username', organization='$selected_domain';
+EOF
+
+    systemctl restart postfix dovecot
+
+    echo "User $email created successfully"
+    echo "Maildir: $maildir"
+    echo "Quota: ${quota}MB"
+}
+
+# Function to verify Postfix and Dovecot integration
+verify_mail_integration() {
+    echo "Verifying mail system integration..."
+    
+    # Test Postfix configuration
+    if ! postfix check; then
+        echo "Error: Postfix configuration check failed"
+        return 1
+    fi
+    
+    # Test Dovecot configuration
+    if ! doveconf -n; then
+        echo "Error: Dovecot configuration check failed"
+        return 1
+    fi
+    
+    # Test database connection
+    local db_password=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    if ! mysql -u roundcube -p"$db_password" roundcubemail -e "SELECT 1" >/dev/null; then
+        echo "Error: Database connection failed"
+        return 1
+    fi
+    
+    echo "Mail system integration verified successfully"
+}
+
+
 # Enhanced user creation with duplicate checking
 # Enhanced user creation with better error handling
-add_roundcube_user() {
+add_roundcube_user_OLD() {
     local username=$1
     local password=$2
     local quota_size=${3:-1000}  # Default 1000MB quota
@@ -904,25 +1035,44 @@ add_roundcube_user() {
     local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # Check if user already exists in database
-    local existing_user=$(mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -sNe "SELECT username FROM users WHERE username = '$email'" 2>/dev/null)
-    if [ -n "$existing_user" ]; then
-        echo "Warning: User $email already exists in Roundcube database (updating instead)."
-        mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "UPDATE users SET mail_host='localhost', preferences='$ROUNDCUBE_PREFERENCE' WHERE username='$email'"
-    else
-        mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
-        INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-        VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-        "
+
+    # Insert new user and retrieve the auto-incremented ID
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
+    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+    SELECT LAST_INSERT_ID();
+    ")
+
+    # Check if USER_ID was retrieved successfully
+    if [ -z "$USER_ID" ]; then
+        echo "Failed to retrieve USER_ID. Aborting."
+        exit 1
     fi
 
-    # Update identities
-    mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
+    # Insert into identities table
+    mysql $ROUNDCUBE_DB_NAME -e "
     INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-    SELECT user_id, NOW(), 0, 1, '$username', '$selected_domain', '$email', '$email', '', 1 
-    FROM users WHERE username = '$email'
-    ON DUPLICATE KEY UPDATE name='$username', organization='$selected_domain';
+    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
     "
+
+    # Check if user already exists in database
+  #  local existing_user=$(mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -sNe "SELECT username FROM users WHERE username = '$email'" 2>/dev/null)
+  #  if [ -n "$existing_user" ]; then
+ #       echo "Warning: User $email already exists in Roundcube database (updating instead)."
+  #      mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "UPDATE users SET mail_host='localhost', preferences='$ROUNDCUBE_PREFERENCE' WHERE username='$email'"
+  #  else
+ #       mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
+  #      INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+  #      VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+  #      "
+   # fi
+
+    # Update identities
+   # mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" roundcubemail -e "
+  #  INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+  #  SELECT user_id, NOW(), 0, 1, '$username', '$selected_domain', '$email', '$email', '', 1 
+  #  FROM users WHERE username = '$email'
+  #  ON DUPLICATE KEY UPDATE name='$username', organization='$selected_domain';
+ #   "
 
     systemctl restart postfix dovecot
 
