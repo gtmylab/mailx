@@ -284,12 +284,10 @@ generate_dkim() {
 
 
 configure_dovecot_sasl() {
-    echo "Performing Comprehensive Dovecot Configuration Installation"
-    
+    echo "=== COMPREHENSIVE DOVECOT CONFIGURATION ==="
+
     # 1. Install required packages
-    apt_install  dovecot-sieve dovecot-managesieved sasl2-bin
-      echo "[OK]"
-    echo "Configuring Dovecot services..."
+    apt-get install -y dovecot-sieve dovecot-managesieved sasl2-bin
 
     # 2. Create vmail user if not exists
     if ! id vmail >/dev/null 2>&1; then
@@ -298,17 +296,18 @@ configure_dovecot_sasl() {
         useradd -g vmail -u 5000 vmail -d /var/mail/vmail -m
         chown -R vmail:vmail /var/mail/vmail
     fi
-    
+
     # 3. Create auth directory structure
     echo "Setting up auth directory..."
     mkdir -p /var/spool/postfix/private
     chown -R postfix:postfix /var/spool/postfix/private
     chmod -R 0750 /var/spool/postfix/private
-    
+
     # 4. Remove any existing auth socket/directory
     [ -e /var/spool/postfix/private/auth ] && rm -rf /var/spool/postfix/private/auth
-    
+
     # 5. Configure 10-master.conf with root auth-worker (temporary)
+    echo "Configuring Dovecot services..."
     cat <<EOF > /etc/dovecot/conf.d/10-master.conf
 service auth {
   unix_listener /var/spool/postfix/private/auth {
@@ -360,12 +359,11 @@ EOF
 
     # 7. Mail location configuration
     cat <<EOF > /etc/dovecot/conf.d/10-mail.conf
-mail_location = maildir:/var/mail/%u
+mail_location = maildir:~/Maildir
 namespace inbox {
   inbox = yes
 }
 EOF
-echo "[OK]"
 
     # 8. Validate configuration
     echo "Validating configuration..."
@@ -417,7 +415,7 @@ test_sasl_authentication() {
     echo "auth plain" | nc localhost 587 | grep -q "VXNlcm5hbWU6" && \
         echo "SASL PLAIN authentication available" || \
         echo "SASL PLAIN authentication NOT available"
-    
+
     echo "auth login" | nc localhost 587 | grep -q "VXNlcm5hbWU6" && \
         echo "SASL LOGIN authentication available" || \
         echo "SASL LOGIN authentication NOT available"
@@ -779,6 +777,7 @@ EOF
     sudo a2enmod headers rewrite
     systemctl restart apache2
     systemctl reload apache2
+
 systemctl restart apache2 postfix dovecot
     systemctl restart apache2
     # Download and install Roundcube
@@ -837,38 +836,12 @@ systemctl restart apache2 postfix dovecot
 add_roundcube_user() {
     local username=$1
     local password=$2
-    local quota=${3:-1000}  # Default 1GB quota
-    local domain_input=$4
+    local quota_size=$3
     local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local email="$username@$domain"
     local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
     local ROUNDCUBE_DB_USER="roundcube"
     local ROUNDCUBE_DB_NAME="roundcubemail"
-
-
-        # Get available domains
-    local domains=($(cat /usr/local/roundcube_mail_domain.txt))
-    local default_domain="${domains[0]}"
-    local selected_domain="$default_domain"
-
-    # Domain selection
-    if [[ -n "$domain_input" ]]; then
-        if [[ " ${domains[@]} " =~ " ${domain_input} " ]]; then
-            selected_domain="$domain_input"
-        else
-            echo "Error: Domain not configured. Available domains: ${domains[@]}"
-            return 1
-        fi
-    fi
-
-    local email="$username@$selected_domain"
-    local maildir="/var/mail/vhosts/$selected_domain/$username"
-
-    # Check for existing user
-    if grep -q "^$email" /etc/postfix/virtual 2>/dev/null; then
-        echo "Error: User $email already exists"
-        return 1
-    fi
 
     # Create system user if not exists
     if ! id "$username" >/dev/null 2>&1; then
@@ -877,24 +850,13 @@ add_roundcube_user() {
         echo "System user $username created."
     fi
 
-    # Create mail directory
-    mkdir -p "$maildir/"{cur,new,tmp}
-    chown -R "$username:$username" "$maildir"
-   # chmod -R 770 "$maildir"
-
-    # Set quota
-    echo "quota_rule = *:storage=${quota}M" > "$maildir/.dovecot.quota"
-    chown "$username:$username" "$maildir/.dovecot.quota"
-
-
-
     # Create Maildir
-  #  mkdir -p "/home/$username/Maildir/"{cur,new,tmp}
-  #  chown -R "$username:$username" "/home/$username/Maildir"
+    mkdir -p "/home/$username/Maildir/"{cur,new,tmp}
+    chown -R "$username:$username" "/home/$username/Maildir"
 
     # Configure Dovecot quota
-   # echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
-   # chown "$username:$username" "/home/$username/.dovecot.quota"
+    echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
+    chown "$username:$username" "/home/$username/.dovecot.quota"
 
     # Add to Postfix virtual maps
     echo "$email $username" >> /etc/postfix/virtual
@@ -1055,7 +1017,7 @@ manage_ssl_certificates() {
 
     case "$action" in
         install)
-            
+
             # Install certbot if not exists
             if ! command -v certbot &> /dev/null; then
              echo "Installing packages needed for Let's Encrypt SSL certificate..."
@@ -1076,10 +1038,10 @@ manage_ssl_certificates() {
                 --non-interactive --agree-tos \
                 --email admin@$domain \
                 --keep-until-expiring
-            
+
             # Configure Postfix/Dovecot to use the cert
             configure_ssl_services "$domain"
-            
+
             # Setup automatic renewal
             setup_ssl_renewal
             echo "[OK]"
@@ -1097,16 +1059,16 @@ manage_ssl_certificates() {
                 echo "Error: New domain not specified"
                 return 1
             fi
-            
+
             echo "Changing SSL certificate from $domain to $new_domain..."
-            
+
             # Obtain new certificate
             certbot certonly --webroot -w "$webroot" -d "$new_domain" -d "mail.$new_domain" \
                 --non-interactive --agree-tos \
                 --email admin@$new_domain \
                 --keep-until-expiring \
                 --force-renewal
-            
+
             # Update services
             configure_ssl_services "$new_domain"
             ;;
@@ -1122,22 +1084,23 @@ manage_ssl_certificates() {
 configure_ssl_services() {
     local domain=$1
     local cert_path="/etc/letsencrypt/live/$domain"
-    
+
     echo "Configuring services to use SSL certificate for $domain..."
-    
+
     # Apache configuration
     sed -i "s|SSLCertificateFile.*|SSLCertificateFile $cert_path/fullchain.pem|" /etc/apache2/sites-available/default-ssl.conf
     sed -i "s|SSLCertificateKeyFile.*|SSLCertificateKeyFile $cert_path/privkey.pem|" /etc/apache2/sites-available/default-ssl.conf
-    
+
     # Postfix configuration
     postconf -e "smtpd_tls_cert_file=$cert_path/fullchain.pem"
     postconf -e "smtpd_tls_key_file=$cert_path/privkey.pem"
-    
+
     # Dovecot configuration
     sed -i "s|ssl_cert =.*|ssl_cert = <$cert_path/fullchain.pem|" /etc/dovecot/conf.d/10-ssl.conf
     sed -i "s|ssl_key =.*|ssl_key = <$cert_path/privkey.pem|" /etc/dovecot/conf.d/10-ssl.conf
-    
+
     # Restart services
+    systemctl restart apache2 postfix dovecot
     #systemctl restart apache2 postfix dovecot
 }
 
@@ -1148,12 +1111,12 @@ setup_ssl_renewal() {
 #!/bin/bash
 certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"
 EOF
-    
+
     chmod +x /usr/local/bin/ssl_renewal.sh
-    
+
     # Add cron job (runs daily at 3am, checks 5 days before expiry)
     (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/ssl_renewal.sh") | crontab -
-    
+
     echo "Automatic SSL renewal configured."
 }
 
@@ -1182,76 +1145,76 @@ echo "Test mail sent to $email_to"
 change_domain_hostname() {
     local old_domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local old_hostname=$(hostname)
-    
+
     echo "Current Domain: $old_domain"
     echo "Current Hostname: $old_hostname"
     echo
-    
+
     # Get new domain and hostname
     read -p "Enter new email domain (e.g., example.com): " new_domain
     read -p "Enter new hostname (e.g., mail.example.com): " new_hostname
-    
+
     # Validate inputs
     if [[ -z "$new_domain" || -z "$new_hostname" ]]; then
         echo "Error: Both domain and hostname are required."
         return 1
     fi
-    
+
     if [[ ! "$new_hostname" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
         echo "Error: '$new_hostname' is not a fully qualified domain name."
         return 1
     fi
-    
+
     echo
     echo "You are about to change:"
     echo "Domain: $old_domain → $new_domain"
     echo "Hostname: $old_hostname → $new_hostname"
     read -p "Are you sure you want to proceed? (y/n): " confirm
-    
+
     if [[ "$confirm" != "y" ]]; then
         echo "Operation cancelled."
         return 0
     fi
-    
+
     echo "Starting domain/hostname change process..."
-    
+
     # 1. Update system hostname
     echo "$new_hostname" > /etc/hostname
     hostnamectl set-hostname "$new_hostname"
     sed -i "s/$old_hostname/$new_hostname/g" /etc/hosts
-    
+
     # 2. Update mailname
     echo "$new_hostname" > /etc/mailname
-    
+
     # 3. Update stored domain
     echo "$new_domain" > /usr/local/roundcube_mail_domain.txt
-    
+
     # 4. Update Postfix configuration
     sed -i "s/$old_domain/$new_domain/g" /etc/postfix/main.cf
     sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/main.cf
-    
+
     # 5. Update header_checks file
     if [ -f "/etc/postfix/header_checks" ]; then
         sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/header_checks
     else
         setup_postfix_header_checks "$new_hostname"
     fi
-    
+
     # 6. Update Roundcube configuration
     if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
         sed -i "s/$old_domain/$new_domain/g" /var/www/html/roundcube/config/config.inc.php
         sed -i "s/mail_domain'] = .*/mail_domain'] = '$new_domain';/" /var/www/html/roundcube/config/config.inc.php
     fi
-    
+
     # 7. Update Apache configurations
     for config_file in /etc/apache2/sites-available/*.conf; do
         sed -i "s/$old_domain/$new_domain/g" "$config_file"
         sed -i "s/$old_hostname/$new_hostname/g" "$config_file"
     done
-    
+
     # 8. Regenerate DKIM keys for new domain
     generate_dkim
-    
+
     # 9. Restart services
     echo "Restarting services..."
     restart_service postfix
@@ -1261,7 +1224,7 @@ change_domain_hostname() {
 
     manage_ssl_certificates change "$new_domain"
 
-    
+
     echo
     echo "Domain and hostname changed successfully!"
     echo "New Domain: $new_domain"
@@ -1272,23 +1235,23 @@ change_domain_hostname() {
 
 setup_postfix_header_checks() {
     local hostname=$1
-    
+
     echo "Configuring Postfix header checks..."
-    
+
     # Create header_checks file
     cat <<EOF > /etc/postfix/header_checks
 /^Received: from \S+ \(.*\[.*\]\)/ REPLACE Received: from $hostname (localhost [127.0.0.1])
 /^X-Originating-IP:/ IGNORE
 EOF
-    
+
     # Add to main.cf if not already present
     if ! grep -q "header_checks" /etc/postfix/main.cf; then
         echo "header_checks = regexp:/etc/postfix/header_checks" >> /etc/postfix/main.cf
     fi
-    
+
     # Set proper permissions
     chmod 644 /etc/postfix/header_checks
-    
+
     echo "Postfix header checks configured successfully."
 }
 
@@ -1296,10 +1259,10 @@ EOF
 set_postfix_custom_port() {
     local current_port=$(postconf -d smtpd_port | awk -F'= ' '{print $2}')
     local new_port
-    
+
     echo "Current Postfix SMTP port: $current_port"
     echo
-    
+
     # Check if port 25 is blocked
     echo "Testing if port 25 is blocked..."
     if timeout 5 telnet localhost 25 &>/dev/null; then
@@ -1311,7 +1274,7 @@ set_postfix_custom_port() {
     else
         echo "Port 25 appears to be blocked."
     fi
-    
+
     # Get new port number
     while true; do
         read -p "Enter new SMTP port number (recommended 587 or 465): " new_port
@@ -1329,21 +1292,21 @@ set_postfix_custom_port() {
             echo "Invalid port number. Please enter a number between 1 and 65535."
         fi
     done
-    
+
     echo
     echo "Changing Postfix SMTP port from $current_port to $new_port..."
-    
+
     # Backup current Postfix configuration
     echo "Backing up current Postfix configuration..."
     cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
     cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
-    
+
     # Update master.cf - remove any existing custom port entries
     echo "Updating Postfix master.cf..."
     sed -i '/^smtp.*inet.*smtpd/d' /etc/postfix/master.cf
     sed -i '/^submission.*inet.*smtpd/d' /etc/postfix/master.cf
     sed -i '/^smtps.*inet.*smtpd/d' /etc/postfix/master.cf
-    
+
     # Add new port configuration to master.cf
     cat <<EOF >> /etc/postfix/master.cf
 # Custom SMTP port
@@ -1353,18 +1316,18 @@ ${new_port}      inet  n       -       y       -       -       smtpd
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_client_restrictions=permit_sasl_authenticated,reject
 EOF
-    
+
     # Update main.cf
     echo "Updating Postfix main.cf..."
     postconf -e "smtpd_port=$new_port"
     postconf -e "alternate_smtp_ports=$new_port"
-    
+
     # Update Roundcube configuration if exists
     if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
         echo "Updating Roundcube configuration..."
         sed -i "s/\$config\['smtp_port'\] = .*/\$config\['smtp_port'\] = $new_port;/" /var/www/html/roundcube/config/config.inc.php
     fi
-    
+
     # Update firewall rules
     if command -v ufw &>/dev/null; then
         echo "Updating UFW firewall rules..."
@@ -1376,11 +1339,11 @@ EOF
         firewall-cmd --permanent --remove-port=25/tcp
         firewall-cmd --reload
     fi
-    
+
     # Restart Postfix
     echo "Restarting Postfix..."
     restart_service postfix
-    
+
     echo
     echo "Postfix SMTP port successfully changed to $new_port"
     echo "You may need to:"
