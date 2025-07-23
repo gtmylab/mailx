@@ -831,70 +831,94 @@ systemctl restart apache2 postfix dovecot
 
 }
 
-# Function to add a new Roundcube user
+# Enhanced user creation with duplicate checking
 add_roundcube_user() {
     local username=$1
     local password=$2
-    local quota_size=$3
-    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
-    local email="$username@$domain"
-    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-    local ROUNDCUBE_DB_USER="roundcube"
-    local ROUNDCUBE_DB_NAME="roundcubemail"
-
-    # Create system user if not exists
-    if ! id "$username" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash "$username"
-        echo "$username:$password" | chpasswd
-        echo "System user $username created."
+    local quota_size=${3:-1000}  # Default 1000MB quota
+    local domain_input=$4
+    local domains=($(cat /usr/local/roundcube_mail_domain.txt))
+    local default_domain="${domains[0]}"
+    local selected_domain="$default_domain"
+    local email
+    
+    # Domain selection logic
+    if [[ -n "$domain_input" ]]; then
+        if [[ " ${domains[@]} " =~ " ${domain_input} " ]]; then
+            selected_domain="$domain_input"
+        else
+            echo "Error: Domain '$domain_input' not configured. Available domains:"
+            printf ' - %s\n' "${domains[@]}"
+            return 1
+        fi
     fi
 
-    # Create Maildir
-    mkdir -p "/home/$username/Maildir/"{cur,new,tmp}
-    chown -R "$username:$username" "/home/$username/Maildir"
+    email="$username@$selected_domain"
 
-    # Configure Dovecot quota
-    echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
-    chown "$username:$username" "/home/$username/.dovecot.quota"
+    # Check for duplicate user
+    if grep -q "^$email" /etc/postfix/virtual; then
+        echo "Error: Email $email already exists."
+        return 1
+    fi
 
-    # Add to Postfix virtual maps
+    if id "$username" >/dev/null 2>&1; then
+        echo "Warning: System user $username already exists (will be reused)."
+    else
+        # Create system user with secure home directory
+        useradd -m -s /bin/bash -d "/var/mail/vhosts/$selected_domain/$username" "$username"
+        echo "$username:$password" | chpasswd
+        echo "Created system user $username"
+    fi
+
+    # Create mail directory structure
+    mkdir -p "/var/mail/vhosts/$selected_domain/$username/"{cur,new,tmp,.cache}
+    chown -R vmail:vmail "/var/mail/vhosts/$selected_domain/$username"
+    chmod -R 770 "/var/mail/vhosts/$selected_domain/$username"
+
+    # Set quota
+    echo "quota_rule = *:storage=${quota_size}M" > "/var/mail/vhosts/$selected_domain/$username/.dovecot.quota"
+    chown vmail:vmail "/var/mail/vhosts/$selected_domain/$username/.dovecot.quota"
+
+    # Update Postfix virtual maps
     echo "$email $username" >> /etc/postfix/virtual
     postmap /etc/postfix/virtual
 
-    # Define the ROUNDCUBE_PREFERENCE variable
-    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+    # Database operations
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    # Insert new user and retrieve the auto-incremented ID
-    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
-    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-    SELECT LAST_INSERT_ID();
-    ")
-
-    # Check if USER_ID was retrieved successfully
-    if [ -z "$USER_ID" ]; then
-        echo "Failed to retrieve USER_ID. Aborting."
-        exit 1
+    # Check if user already exists in database
+    local existing_user=$(mysql roundcubemail -sNe "SELECT username FROM users WHERE username = '$email'")
+    if [ -n "$existing_user" ]; then
+        echo "Warning: User $email already exists in Roundcube database (updating instead)."
+        mysql roundcubemail -e "UPDATE users SET mail_host='localhost', preferences='$ROUNDCUBE_PREFERENCE' WHERE username='$email'"
+    else
+        mysql roundcubemail -e "
+        INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+        VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+        "
     fi
 
-    # Insert into identities table
-    mysql $ROUNDCUBE_DB_NAME -e "
+    # Update identities
+    mysql roundcubemail -e "
     INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
+    SELECT user_id, NOW(), 0, 1, '$username', '$selected_domain', '$email', '$email', '', 1 
+    FROM users WHERE username = '$email'
+    ON DUPLICATE KEY UPDATE name='$username', organization='$selected_domain';
     "
 
-    # Restart services
     systemctl restart postfix dovecot
 
-    # Send welcome email
-    send_welcome_email "$email" "$username"
-
     echo "==============================================="
-    echo "User successfully configured:"
-    echo "Email: $email"
-    echo "Username: $username"
-    echo "Quota: ${quota_size}M"
+    echo "USER CREATION SUCCESSFUL"
+    echo "Email:        $email"
+    echo "Username:     $username"
+    echo "Domain:       $selected_domain"
+    echo "Quota:        ${quota_size}MB"
+    echo "Maildir:      /var/mail/vhosts/$selected_domain/$username"
     echo "==============================================="
 }
+
 
 # Function to uninstall Roundcube, including database and user
 uninstall_roundcube() {
@@ -949,6 +973,87 @@ uninstall_all() {
 
     echo "Uninstallation completed."
 }
+
+
+# Function to manage email domains
+manage_email_domains() {
+    local ACTION=$1
+    local DOMAIN=$2
+    
+    case "$ACTION" in
+        add)
+            # Validate domain format
+            if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                echo "Error: '$DOMAIN' is not a valid domain format."
+                return 1
+            fi
+
+            # Check if domain already exists
+            if grep -qFx "$DOMAIN" /usr/local/roundcube_mail_domain.txt; then
+                echo "Domain $DOMAIN already exists."
+                return 0
+            fi
+
+            echo "Adding $DOMAIN to mail server configuration..."
+            echo "$DOMAIN" >> /usr/local/roundcube_mail_domain.txt
+
+            # Update Postfix configuration
+            sed -i "/^mydestination =/ s/$/, $DOMAIN/" /etc/postfix/main.cf
+            sed -i "/^virtual_mailbox_domains =/ s/$/, $DOMAIN/" /etc/postfix/main.cf
+            echo "$DOMAIN OK" >> /etc/postfix/virtual_mailbox_domains
+            postmap /etc/postfix/virtual_mailbox_domains
+
+            # Create mail directory
+            mkdir -p "/var/mail/vhosts/$DOMAIN"
+            chown -R vmail:vmail "/var/mail/vhosts/$DOMAIN"
+            chmod -R 770 "/var/mail/vhosts/$DOMAIN"
+
+            systemctl restart postfix dovecot
+            echo "Successfully added $DOMAIN"
+            ;;
+
+        remove)
+            # Check if domain exists
+            if ! grep -qFx "$DOMAIN" /usr/local/roundcube_mail_domain.txt; then
+                echo "Error: Domain $DOMAIN not found."
+                return 1
+            fi
+
+            # Prevent removal if it's the last domain
+            if [ $(wc -l < /usr/local/roundcube_mail_domain.txt) -eq 1 ]; then
+                echo "Error: Cannot remove the last remaining domain."
+                return 1
+            fi
+
+            echo "Removing $DOMAIN from mail server..."
+
+            # Remove from domain list
+            sed -i "/^$DOMAIN$/d" /usr/local/roundcube_mail_domain.txt
+
+            # Update Postfix configuration
+            sed -i "/$DOMAIN/d" /etc/postfix/main.cf
+            sed -i "/$DOMAIN/d" /etc/postfix/virtual_mailbox_domains
+            postmap /etc/postfix/virtual_mailbox_domains
+
+            # Archive mail directory instead of deleting
+            mv "/var/mail/vhosts/$DOMAIN" "/var/mail/archived_vhosts/$DOMAIN_$(date +%Y%m%d)"
+
+            systemctl restart postfix dovecot
+            echo "Successfully removed $DOMAIN (mail data archived)"
+            ;;
+
+        list)
+            echo "Configured email domains:"
+            cat /usr/local/roundcube_mail_domain.txt
+            ;;
+
+        *)
+            echo "Usage: manage_email_domains [add|remove|list] [domain]"
+            return 1
+            ;;
+    esac
+}
+
 
 # Function to send email notification
 send_notification_email() {
@@ -1351,9 +1456,45 @@ EOF
     echo "4. Update port forwarding rules if behind NAT"
 }
 
+# Function to remove a user
+remove_email_user() {
+    local email=$1
+    local username=$(echo "$email" | cut -d@ -f1)
+    local domain=$(echo "$email" | cut -d@ -f2)
+
+    # Verify domain exists
+    if ! grep -qFx "$domain" /usr/local/roundcube_mail_domain.txt; then
+        echo "Error: Domain $domain not configured."
+        return 1
+    fi
+
+    # Remove from Postfix
+    sed -i "/^$email/d" /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+
+    # Remove from Roundcube database
+    mysql roundcubemail -e "DELETE FROM users WHERE username = '$email'"
+    mysql roundcubemail -e "DELETE FROM identities WHERE email = '$email'"
+
+    # Archive user data instead of deleting
+    local archive_dir="/var/mail/archived_users/$domain/$username_$(date +%Y%m%d)"
+    mkdir -p "$archive_dir"
+    mv "/var/mail/vhosts/$domain/$username" "$archive_dir"
+
+    # Keep system user but disable login
+    if id "$username" >/dev/null 2>&1; then
+        usermod -L -s /sbin/nologin "$username"
+        echo "System user $username disabled (login locked)"
+    fi
+
+    systemctl restart postfix dovecot
+    echo "Successfully removed user $email (data archived to $archive_dir)"
+}
+
 clear
+
 # Main script starts here
-echo "=== Roundcube and Postfix Installation ==="
+echo "=== MailX Management Console ==="
 
 # Check if script is run with root privileges
 if [ "$(id -u)" != "0" ]; then
@@ -1361,134 +1502,122 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-
 # Select an option
 echo "Select an option:"
 echo "1. Install MailX"
-echo "2. Add MailX User"
-echo "3. Send a test mail"
-echo "4. Uninstall Roundcube"
-echo "5. Uninstall MailX"
-echo "6. Change Domain"
-echo "7. Change SMTP port"
+echo "2. Add Email User"
+echo "3. Remove Email User"
+echo "4. Add Email Domain"
+echo "5. Remove Email Domain"
+echo "6. Send Test Email"
+echo "7. Change SMTP Port"
+echo "8. Change Domain/Hostname"
+echo "9. Uninstall Roundcube"
+echo "10. Uninstall MailX (Complete Removal)"
 
-read -p "Enter your choice (1, 2, 3, 4, 5, 6 or 7): " choice
-
+read -p "Enter your choice (1-10): " choice
 
 case $choice in
     1)
-    clear
-# Welcome message
-echo "Welcome to the MailX Server  Installation Script!"
-echo
-echo
-# Loop until all required fields are entered correctly
-while true; do
-    # Ask for user input
-    read -p "Please enter the email domain (e.g., example.com): " EMAIL_DOMAIN
-    read -p "Please enter the hostname (e.g., mail.example.com): " HOSTNAME
-    read -p "Please enter the admin email address: " ADMIN_MAILX_EMAIL
-
-    echo
-
-    # Validate inputs
-    if [[ -z "$EMAIL_DOMAIN" || -z "$HOSTNAME" || -z "$ADMIN_MAILX_EMAIL" ]]; then
-        echo "Error: All fields (Email Domain, Hostname, Admin Email) are mandatory. Please provide values for all."
-        continue
-    fi
-
-    # Validate hostname
-    if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        echo "Error: '$HOSTNAME' is not a fully qualified domain name. Please enter a valid FQDN."
-        continue
-    fi
-
-    # Display the entered information and ask for confirmation
-    echo "You have entered the following information:"
-    echo "Email Domain: $EMAIL_DOMAIN"
-    echo "Hostname: $HOSTNAME"
-    echo "Admin Email: $ADMIN_MAILX_EMAIL"
-    echo
-    read -p "Is this information correct? (y/n): " CONFIRM
-
-    if [ "$CONFIRM" = "y" ]; then
-        break
-    else
-        echo "Please re-enter the information."
-    fi
-done
-
-# Generate MySQL root password and Roundcube DB password
-MYSQL_ROOT_PASSWORD=$(generate_password 16)
-ROUNDCUBE_DB_PASSWORD=$(generate_password 16)
-
-# Store passwords and domain in files (example)
-echo "$MYSQL_ROOT_PASSWORD" > /usr/local/mysql_root_pwd.txt
-echo "$ROUNDCUBE_DB_PASSWORD" > /usr/local/roundcube_db_pwd.txt
-echo "$EMAIL_DOMAIN" > /usr/local/roundcube_mail_domain.txt
-
-# Install Roundcube with specified configurations
-install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
-
-  ;;
-    2)
-        read -p "Enter new username: " username
-      #  read -p "Enter domain: " domain
-        read -sp "Enter password for $username@$(retrieve_file_data /usr/local/roundcube_mail_domain.txt): " password
+        clear
+        echo "Welcome to the MailX Server Installation Script!"
         echo
+        # Loop until all required fields are entered correctly
+        while true; do
+            # Ask for user input
+            read -p "Please enter the email domain (e.g., example.com): " EMAIL_DOMAIN
+            read -p "Please enter the hostname (e.g., mail.example.com): " HOSTNAME
+            read -p "Please enter the admin email address: " ADMIN_MAILX_EMAIL
 
-        # Call function to add Roundcube user
-        add_roundcube_user "$username" "$password" 2000
+            echo
 
+            # Validate inputs
+            if [[ -z "$EMAIL_DOMAIN" || -z "$HOSTNAME" || -z "$ADMIN_MAILX_EMAIL" ]]; then
+                echo "Error: All fields are mandatory. Please provide values for all."
+                continue
+            fi
+
+            # Validate hostname
+            if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                echo "Error: '$HOSTNAME' is not a fully qualified domain name."
+                continue
+            fi
+
+            # Display the entered information and ask for confirmation
+            echo "You have entered:"
+            echo "Email Domain: $EMAIL_DOMAIN"
+            echo "Hostname: $HOSTNAME"
+            echo "Admin Email: $ADMIN_MAILX_EMAIL"
+            echo
+            read -p "Is this information correct? (y/n): " CONFIRM
+
+            if [ "$CONFIRM" = "y" ]; then
+                break
+            else
+                echo "Please re-enter the information."
+            fi
+        done
+
+        # Generate and store passwords
+        MYSQL_ROOT_PASSWORD=$(generate_password 16)
+        ROUNDCUBE_DB_PASSWORD=$(generate_password 16)
+        echo "$MYSQL_ROOT_PASSWORD" > /usr/local/mysql_root_pwd.txt
+        echo "$ROUNDCUBE_DB_PASSWORD" > /usr/local/roundcube_db_pwd.txt
+        echo "$EMAIL_DOMAIN" > /usr/local/roundcube_mail_domain.txt
+
+        # Install Roundcube
+        install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
+        ;;
+
+    2)
+        read -p "Enter username (without domain): " username
+        read -sp "Enter password: " password
+        echo
+        read -p "Enter domain (leave blank for default): " domain
+        read -p "Enter quota in MB (default 1000): " quota
+
+        # Call function to add user
+        add_roundcube_user "$username" "$password" "${quota:-1000}" "$domain"
         ;;
 
     3)
-        read -p "Email to: " email_to
-        read -p "Subject: " email_subject
-        read -p "Message Body: " email_body
-
-      #  read -p "Enter domain: " domain
-        echo
-
-        # Call function to add Roundcube user
-        send_test_message "$email_to" "$email_subject" "$email_body"
-
+        read -p "Enter full email address to remove (user@domain.com): " email
+        remove_email_user "$email"
         ;;
 
-
     4)
-    read -p "Are you sure you want to uninstall ? (yes or no): " RECONFIRM_UNINSTALL
-
-    if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
-        uninstall_roundcube
-    else
-        echo "Exiting."
-    fi
-    exit 1
-    ;;
+        read -p "Enter new domain to add (e.g., example2.com): " new_domain
+        manage_email_domains add "$new_domain"
+        ;;
 
     5)
-    read -p "Are you sure you want to uninstall Postfix, MySQL, and Roundcube ? (yes or no): " RECONFIRM_UNINSTALL
+        read -p "Enter domain to remove (e.g., example2.com): " old_domain
+        manage_email_domains remove "$old_domain"
+        ;;
 
-    if [[ "$RECONFIRM_UNINSTALL" == "yes" ]]; then
-       # Call function to uninstall Postfix, MySQL, and Roundcube
-        uninstall_all    
-        else
-        echo "Exiting."
-    fi
-    exit 1
-    ;;
-
-    # In the main menu case statement, add:
     6)
-        # Change domain/hostname
+        read -p "Recipient email address: " email_to
+        read -p "Subject: " email_subject
+        read -p "Message Body: " email_body
+        send_test_message "$email_to" "$email_subject" "$email_body"
+        ;;
+
+    7)
+        set_postfix_custom_port
+        ;;
+
+    8)
         change_domain_hostname
         ;;
 
-        # In the main menu case statement, add:
-    7)
-        # Set custom SMTP port for Postfix
-        set_postfix_custom_port
+    9)
+        read -p "Are you sure you want to uninstall Roundcube? (yes/no): " confirm
+        [[ "$confirm" == "yes" ]] && uninstall_roundcube
+        ;;
+
+    10)
+        read -p "WARNING: This will completely remove MailX. Continue? (yes/no): " confirm
+        [[ "$confirm" == "yes" ]] && uninstall_all
         ;;
 
     *)
