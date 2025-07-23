@@ -1100,7 +1100,7 @@ configure_ssl_services() {
     sed -i "s|ssl_key =.*|ssl_key = <$cert_path/privkey.pem|" /etc/dovecot/conf.d/10-ssl.conf
 
     # Restart services
-    systemctl restart apache2 postfix dovecot
+    #systemctl restart apache2 postfix dovecot
     #systemctl restart apache2 postfix dovecot
 }
 
