@@ -832,6 +832,7 @@ systemctl restart apache2 postfix dovecot
 }
 
 # Enhanced user creation with duplicate checking
+# Enhanced user creation with better error handling
 add_roundcube_user() {
     local username=$1
     local password=$2
