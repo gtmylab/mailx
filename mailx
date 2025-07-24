@@ -1489,16 +1489,13 @@ remove_user_from_domain() {
 # Function to add a user (with optional domain and quota)
 add_user_to_domain() {
     local username=$1
-    local domain=$2  # Will be empty if not provided
+    local domain=${2:-}  # Make domain optional
     local password=$3
-    local quota_size=$4  # Will be empty if not provided
+    local quota_size=${4:-1000}  # Default quota of 1000MB
     
     local domain_file="/usr/local/roundcube_mail_domain.txt"
     
-    # Set default quota if not provided or empty
-    quota_size=${quota_size:-1000}  # Default quota of 1000MB
-    
-    # If domain not specified or empty, use the first domain in the file as default
+    # If domain not specified, use the first domain in the file as default
     if [ -z "$domain" ]; then
         domain=$(head -n 1 "$domain_file" 2>/dev/null)
         if [ -z "$domain" ]; then
@@ -1735,19 +1732,16 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         echo
         read -p "Enter quota in MB (default 1000): " quota
         
-        # Call the function - empty parameters can now be passed without quotes
-        add_user_to_domain "$username" $domain "$password" $quota
-
         # Call the function with only provided parameters
-       # if [ -z "$domain" ] && [ -z "$quota" ]; then
-       #     add_user_to_domain "$username" "" "$password"
-     #   elif [ -z "$domain" ]; then
-      #      add_user_to_domain "$username" "" "$password" "$quota"
-      #  elif [ -z "$quota" ]; then
-      #      add_user_to_domain "$username" "$domain" "$password"
-      #  else
-       #     add_user_to_domain "$username" "$domain" "$password" "$quota"
-      #  fi
+        if [ -z "$domain" ] && [ -z "$quota" ]; then
+            add_user "$username" "" "$password"
+        elif [ -z "$domain" ]; then
+            add_user "$username" "" "$password" "$quota"
+        elif [ -z "$quota" ]; then
+            add_user "$username" "$domain" "$password"
+        else
+            add_user "$username" "$domain" "$password" "$quota"
+        fi
         ;;
         
     11)
