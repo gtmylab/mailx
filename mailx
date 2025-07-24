@@ -1513,7 +1513,7 @@ add_user_to_domain() {
     # Create a simplified system username (letters and numbers only)
     local clean_username=$(echo "$username" | tr -cd '[:alnum:]')
     local clean_domain=$(echo "$domain" | awk -F. '{print $1}' | tr -cd '[:alnum:]')
-    local full_username="${clean_username}_${clean_domain}"
+    local full_username=$username
     
     # Ensure username meets Linux requirements (max 32 chars, no special chars)
     full_username=$(echo "$full_username" | cut -c 1-32 | tr -cd '[:alnum:]_')
@@ -1551,11 +1551,13 @@ add_user_to_domain() {
     
     # Add to Roundcube database if Roundcube is installed
   #  if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
-        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-        local ROUNDCUBE_DB_USER="roundcube"
-        local ROUNDCUBE_DB_NAME="roundcubemail"
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
+
         
         # Define the ROUNDCUBE_PREFERENCE variable
+    # Define the ROUNDCUBE_PREFERENCE variable
     # Define the ROUNDCUBE_PREFERENCE variable
     ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
@@ -1576,6 +1578,7 @@ add_user_to_domain() {
     INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
     VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
     "
+
 
    # fi
     
