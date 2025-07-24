@@ -1490,8 +1490,8 @@ remove_user_from_domain() {
 add_user_to_domain() {
     local username=$1
     local password=$2
-    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt" 2>/dev/null)}  # Default to first domain
-    local quota_size=${4:-1000}  # Default quota of 1000MB
+    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt" 2>/dev/null)}
+    local quota_size=${4:-1000}
     
     local domain_file="/usr/local/roundcube_mail_domain.txt"
     
@@ -1509,21 +1509,40 @@ add_user_to_domain() {
     
     echo "Using domain: $domain"
     
+    # Create a simplified system username (letters and numbers only)
+    local clean_username=$(echo "$username" | tr -cd '[:alnum:]')
+    local clean_domain=$(echo "$domain" | awk -F. '{print $1}' | tr -cd '[:alnum:]')
+    local full_username="${clean_username}_${clean_domain}"
+    
+    # Ensure username meets Linux requirements (max 32 chars, no special chars)
+    full_username=$(echo "$full_username" | cut -c 1-32 | tr -cd '[:alnum:]_')
+    
     # Create system user if not exists
-    local full_username="${username}_${domain//./_}"  # Create unique username by combining with domain
     if ! id "$full_username" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash "$full_username"
-        echo "$full_username:$password" | chpasswd
+        if ! useradd -m -s /bin/bash "$full_username"; then
+            echo "Error: Failed to create system user $full_username"
+            return 1
+        fi
+        
+        if ! echo "$full_username:$password" | chpasswd; then
+            echo "Error: Failed to set password for $full_username"
+            userdel -r "$full_username" 2>/dev/null
+            return 1
+        fi
         echo "System user $full_username created."
     fi
     
     # Create Maildir
     mkdir -p "/home/$full_username/Maildir/"{cur,new,tmp}
-    chown -R "$full_username:$full_username" "/home/$full_username/Maildir"
+    chown -R "$full_username:$full_username" "/home/$full_username/Maildir" || {
+        echo "Warning: Could not set Maildir permissions"
+    }
     
     # Configure Dovecot quota
     echo "quota_rule = *:storage=${quota_size}M" > "/home/$full_username/.dovecot.quota"
-    chown "$full_username:$full_username" "/home/$full_username/.dovecot.quota"
+    chown "$full_username:$full_username" "/home/$full_username/.dovecot.quota" || {
+        echo "Warning: Could not set quota file permissions"
+    }
     
     # Add to Postfix virtual maps
     echo "$username@$domain $full_username" >> /etc/postfix/virtual
@@ -1543,13 +1562,13 @@ add_user_to_domain() {
         INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
         VALUES ('$username@$domain', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
         SELECT LAST_INSERT_ID();
-        ")
+        ") 2>/dev/null || echo "Warning: Could not add user to Roundcube database"
         
         # Insert into identities table
         mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
         INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
         VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$username@$domain', '$username@$domain', '', '1');
-        "
+        " 2>/dev/null || echo "Warning: Could not add identity to Roundcube database"
     fi
     
     # Restart services
@@ -1561,7 +1580,7 @@ add_user_to_domain() {
     echo "==============================================="
     echo "User successfully configured:"
     echo "Email: $username@$domain"
-    echo "Username: $full_username"
+    echo "System username: $full_username"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
