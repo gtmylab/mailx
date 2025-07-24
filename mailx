@@ -1516,7 +1516,7 @@ add_user_to_domain() {
     local full_username=$username
     
     # Ensure username meets Linux requirements (max 32 chars, no special chars)
-    full_username=$(echo "$full_username" | cut -c 1-32 | tr -cd '[:alnum:]_')
+   # full_username=$(echo "$full_username" | cut -c 1-32 | tr -cd '[:alnum:]_')
     
     # Create system user if not exists
     if ! id "$full_username" >/dev/null 2>&1; then
@@ -1589,7 +1589,7 @@ add_user_to_domain() {
     send_welcome_email "$username@$domain" "$username"
     
     echo "==============================================="
-    echo "User successfully configured:"
+    echo "User successfully configured !"
     echo "Email: $username@$domain"
     echo "System username: $full_username"
     echo "Quota: ${quota_size}M"
