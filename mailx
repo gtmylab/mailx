@@ -1558,16 +1558,21 @@ add_user_to_domain() {
         local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
         
         # Insert new user and retrieve the auto-incremented ID
-        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se "
+        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
         INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-        VALUES ('$username@$domain', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+        VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
         SELECT LAST_INSERT_ID();
         ") 2>/dev/null || echo "Warning: Could not add user to Roundcube database"
         
+            # Check if USER_ID was retrieved successfully
+    if [ -z "$USER_ID" ]; then
+        echo "Failed to retrieve USER_ID. Aborting."
+        exit 1
+    fi
         # Insert into identities table
-        mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
+        mysql $ROUNDCUBE_DB_NAME -e "
         INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-        VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$username@$domain', '$username@$domain', '', '1');
+        VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$username@$domain', '$username@$domain', '', '1');
         " 2>/dev/null || echo "Warning: Could not add identity to Roundcube database"
     fi
     
