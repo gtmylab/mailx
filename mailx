@@ -1353,6 +1353,225 @@ EOF
     echo "4. Update port forwarding rules if behind NAT"
 }
 
+# Function to add a new domain
+add_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    
+    # Check if domain already exists
+    if check_string_in_file "$domain_file" "$domain"; then
+        echo "Domain $domain already exists."
+        return 1
+    fi
+    
+    # Add domain to file
+    echo "$domain" >> "$domain_file"
+    echo "Domain $domain added successfully."
+    
+    # Update Postfix configuration for multiple domains
+    update_postfix_for_multiple_domains
+    
+    return 0
+}
+
+# Function to remove a domain
+remove_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local temp_file=$(mktemp)
+    
+    # Check if this is the last domain
+    local domain_count=$(wc -l < "$domain_file")
+    if [ "$domain_count" -le 1 ]; then
+        echo "Cannot remove the last domain. At least one domain must remain."
+        return 1
+    fi
+    
+    # Check if domain exists
+    if ! check_string_in_file "$domain_file" "$domain"; then
+        echo "Domain $domain does not exist."
+        return 1
+    fi
+    
+    # Remove domain from file
+    grep -v "^$domain$" "$domain_file" > "$temp_file"
+    mv "$temp_file" "$domain_file"
+    
+    echo "Domain $domain removed successfully."
+    
+    # Update Postfix configuration for multiple domains
+    update_postfix_for_multiple_domains
+    
+    return 0
+}
+
+# Function to update Postfix for multiple domains
+update_postfix_for_multiple_domains() {
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local domains=$(cat "$domain_file" | tr '\n' ' ')
+    
+    # Update virtual_alias_domains in main.cf
+    if grep -q "^virtual_alias_domains" /etc/postfix/main.cf; then
+        sed -i "s/^virtual_alias_domains = .*/virtual_alias_domains = $domains/" /etc/postfix/main.cf
+    else
+        echo "virtual_alias_domains = $domains" >> /etc/postfix/main.cf
+    fi
+    
+    # Update mydestination to include all domains
+    if grep -q "^mydestination" /etc/postfix/main.cf; then
+        sed -i "s/^mydestination = .*/mydestination = \$myhostname, localhost.\$mydomain, localhost, $domains/" /etc/postfix/main.cf
+    else
+        echo "mydestination = \$myhostname, localhost.\$mydomain, localhost, $domains" >> /etc/postfix/main.cf
+    fi
+    
+    # Reload Postfix
+    postfix reload
+}
+
+# Function to remove a user from a domain
+remove_user_from_domain() {
+    local username=$1
+    local domain=$2
+    
+    # Verify domain exists
+    if ! check_string_in_file "/usr/local/roundcube_mail_domain.txt" "$domain"; then
+        echo "Error: Domain $domain does not exist."
+        return 1
+    fi
+    
+    local full_username="${username}_${domain//./_}"
+    local email="$username@$domain"
+    
+    # Check if user exists
+    if ! id "$full_username" >/dev/null 2>&1; then
+        echo "Error: User $full_username does not exist."
+        return 1
+    fi
+    
+    # Remove from Postfix virtual maps
+    sed -i "/^$email/d" /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+    
+    # Remove from Roundcube database if Roundcube is installed
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+        local ROUNDCUBE_DB_USER="roundcube"
+        local ROUNDCUBE_DB_NAME="roundcubemail"
+        
+        # Get user ID from Roundcube
+        local USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se "
+        SELECT user_id FROM users WHERE username='$email' AND mail_host='$domain';
+        ")
+        
+        if [ -n "$USER_ID" ]; then
+            # Delete from identities table first (foreign key constraint)
+            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
+            DELETE FROM identities WHERE user_id='$USER_ID';
+            "
+            
+            # Then delete from users table
+            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
+            DELETE FROM users WHERE user_id='$USER_ID';
+            "
+        fi
+    fi
+    
+    # Delete system user and home directory
+    userdel -r "$full_username" 2>/dev/null || true
+    
+    # Restart services
+    systemctl restart postfix dovecot
+    
+    echo "User $email removed successfully."
+}
+
+
+# Function to add a user (with optional domain and quota)
+add_user_to_domain() {
+    local username=$1
+    local domain=$2  # Will be empty if not provided
+    local password=$3
+    local quota_size=$4  # Will be empty if not provided
+    
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    
+    # Set default quota if not provided or empty
+    quota_size=${quota_size:-1000}  # Default quota of 1000MB
+    
+    # If domain not specified or empty, use the first domain in the file as default
+    if [ -z "$domain" ]; then
+        domain=$(head -n 1 "$domain_file" 2>/dev/null)
+        if [ -z "$domain" ]; then
+            echo "Error: No domains configured. Please add a domain first."
+            return 1
+        fi
+        echo "Using default domain: $domain"
+    fi
+    
+    
+    # Verify domain exists
+    if ! check_string_in_file "$domain_file" "$domain"; then
+        echo "Error: Domain $domain does not exist."
+        return 1
+    fi
+    
+    # Create system user if not exists
+    local full_username="${username}_${domain//./_}"  # Create unique username by combining with domain
+    if ! id "$full_username" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$full_username"
+        echo "$full_username:$password" | chpasswd
+        echo "System user $full_username created."
+    fi
+    
+    # Create Maildir
+    mkdir -p "/home/$full_username/Maildir/"{cur,new,tmp}
+    chown -R "$full_username:$full_username" "/home/$full_username/Maildir"
+    
+    # Configure Dovecot quota
+    echo "quota_rule = *:storage=${quota_size}M" > "/home/$full_username/.dovecot.quota"
+    chown "$full_username:$full_username" "/home/$full_username/.dovecot.quota"
+    
+    # Add to Postfix virtual maps
+    echo "$username@$domain $full_username" >> /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+    
+    # Add to Roundcube database if Roundcube is installed
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+        local ROUNDCUBE_DB_USER="roundcube"
+        local ROUNDCUBE_DB_NAME="roundcubemail"
+        
+        # Define the ROUNDCUBE_PREFERENCE variable
+        local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+        
+        # Insert new user and retrieve the auto-incremented ID
+        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se "
+        INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+        VALUES ('$username@$domain', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+        SELECT LAST_INSERT_ID();
+        ")
+        
+        # Insert into identities table
+        mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
+        INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+        VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$username@$domain', '$username@$domain', '', '1');
+        "
+    fi
+    
+    # Restart services
+    systemctl restart postfix dovecot
+    
+    # Send welcome email
+    send_welcome_email "$username@$domain" "$username"
+    
+    echo "==============================================="
+    echo "User successfully configured:"
+    echo "Email: $username@$domain"
+    echo "Username: $full_username"
+    echo "Quota: ${quota_size}M"
+    echo "==============================================="
+}
+
 clear
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
@@ -1365,6 +1584,7 @@ fi
 
 
 # Select an option
+# Select an option
 echo "Select an option:"
 echo "1. Install MailX"
 echo "2. Add MailX User"
@@ -1373,8 +1593,12 @@ echo "4. Uninstall Roundcube"
 echo "5. Uninstall MailX"
 echo "6. Change Domain"
 echo "7. Change SMTP port"
+echo "8. Add Email Domain"
+echo "9. Remove Email Domain"
+echo "10. Add User to Domain"
+echo "11. Remove User from Domain"
 
-read -p "Enter your choice (1, 2, 3, 4, 5, 6 or 7): " choice
+read -p "Enter your choice (1-11): " choice
 
 
 case $choice in
@@ -1492,6 +1716,47 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         # Set custom SMTP port for Postfix
         set_postfix_custom_port
         ;;
+
+            
+    8)
+        read -p "Enter domain to add (e.g., example.com): " new_domain
+        add_domain "$new_domain"
+        ;;
+        
+    9)
+        read -p "Enter domain to remove (e.g., example.com): " domain_to_remove
+        remove_domain "$domain_to_remove"
+        ;;
+        
+    10)
+        read -p "Enter username: " username
+        read -p "Enter domain (leave blank for default): " domain
+        read -sp "Enter password: " password
+        echo
+        read -p "Enter quota in MB (default 1000): " quota
+        
+        # Call the function - empty parameters can now be passed without quotes
+        add_user_to_domain "$username" $domain "$password" $quota
+
+        # Call the function with only provided parameters
+       # if [ -z "$domain" ] && [ -z "$quota" ]; then
+       #     add_user_to_domain "$username" "" "$password"
+     #   elif [ -z "$domain" ]; then
+      #      add_user_to_domain "$username" "" "$password" "$quota"
+      #  elif [ -z "$quota" ]; then
+      #      add_user_to_domain "$username" "$domain" "$password"
+      #  else
+       #     add_user_to_domain "$username" "$domain" "$password" "$quota"
+      #  fi
+        ;;
+        
+    11)
+        read -p "Enter username: " username
+        read -p "Enter domain: " domain
+        
+        remove_user_from_domain "$username" "$domain"
+        ;;
+        
 
     *)
         echo "Invalid choice. Exiting."
