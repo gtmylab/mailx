@@ -1549,7 +1549,7 @@ add_user_to_domain() {
     postmap /etc/postfix/virtual
     
     # Add to Roundcube database if Roundcube is installed
-    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+  #  if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
         local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
         local ROUNDCUBE_DB_USER="roundcube"
         local ROUNDCUBE_DB_NAME="roundcubemail"
@@ -1574,7 +1574,7 @@ add_user_to_domain() {
         INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
         VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$username@$domain', '$username@$domain', '', '1');
         " 2>/dev/null || echo "Warning: Could not add identity to Roundcube database"
-    fi
+   # fi
     
     # Restart services
     systemctl restart postfix dovecot
