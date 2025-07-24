@@ -1489,28 +1489,25 @@ remove_user_from_domain() {
 # Function to add a user (with optional domain and quota)
 add_user_to_domain() {
     local username=$1
-    local domain=${2:-}  # Make domain optional
-    local password=$3
+    local password=$2
+    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt" 2>/dev/null)}  # Default to first domain
     local quota_size=${4:-1000}  # Default quota of 1000MB
     
     local domain_file="/usr/local/roundcube_mail_domain.txt"
     
-    # If domain not specified, use the first domain in the file as default
+    # Validate we have a domain
     if [ -z "$domain" ]; then
-        domain=$(head -n 1 "$domain_file" 2>/dev/null)
-        if [ -z "$domain" ]; then
-            echo "Error: No domains configured. Please add a domain first."
-            return 1
-        fi
-        echo "Using default domain: $domain"
+        echo "Error: No domains configured. Please add a domain first."
+        return 1
     fi
-    
     
     # Verify domain exists
     if ! check_string_in_file "$domain_file" "$domain"; then
         echo "Error: Domain $domain does not exist."
         return 1
     fi
+    
+    echo "Using domain: $domain"
     
     # Create system user if not exists
     local full_username="${username}_${domain//./_}"  # Create unique username by combining with domain
@@ -1732,15 +1729,15 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         echo
         read -p "Enter quota in MB (default 1000): " quota
         
-        # Call the function with only provided parameters
+        # Call the function with proper parameter ordering
         if [ -z "$domain" ] && [ -z "$quota" ]; then
-            add_user "$username" "" "$password"
+            add_user_to_domain "$username" "$password"
         elif [ -z "$domain" ]; then
-            add_user "$username" "" "$password" "$quota"
+            add_user_to_domain "$username" "$password" "" "$quota"
         elif [ -z "$quota" ]; then
-            add_user "$username" "$domain" "$password"
+            add_user_to_domain "$username" "$password" "$domain"
         else
-            add_user "$username" "$domain" "$password" "$quota"
+            add_user_to_domain "$username" "$password" "$domain" "$quota"
         fi
         ;;
         
