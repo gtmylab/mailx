@@ -1524,40 +1524,21 @@ email_to_username() {
 add_user_to_domain() {
     local username=$1
     local password=$2
-    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt" 2>/dev/null)}
+    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt")}
     local quota_size=${4:-1000}
     local email="$username@$domain"
     local domain_file="/usr/local/roundcube_mail_domain.txt"
     
     # Validate inputs
-    if [ -z "$domain" ]; then
-        echo "Error: No domains configured. Please add a domain first."
-        return 1
-    fi
-    
-    if [ -z "$username" ]; then
-        echo "Error: No username specified"
-        return 1
-    fi
+    [ -z "$domain" ] && { echo "Error: No domain specified"; return 1; }
+    [ -z "$username" ] && { echo "Error: No username specified"; return 1; }
 
-    # Verify domain exists
-    if ! check_string_in_file "$domain_file" "$domain"; then
-        echo "Error: Domain $domain does not exist."
-        return 1
-    fi
-    
-    echo "Using domain: $domain"
-
-    # Create system username (john@domain.com -> john_domain.com)
-    local sys_username=$(echo "${username}@${domain}" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c 1-32)
+    # Create system username (compatible format)
+    local sys_username="${username}_$(echo "$domain" | cut -d. -f1)"
+    sys_username=$(echo "$sys_username" | tr -cd '[:alnum:]_' | cut -c 1-32)
     
     # Create mail directory structure
-    local maildir_path="/var/mail/vmail/$domain/$username"
-    local maildir_full="$maildir_path/Maildir"
-    
-    # Create parent directory first with correct permissions
-    mkdir -p "/var/mail/vmail/$domain"
-    chown vmail:vmail "/var/mail/vmail/$domain"
+    local maildir_path="/var/mail/vmail/$domain/$username/Maildir"
     
     # Create system user if not exists
     if ! id "$sys_username" >/dev/null 2>&1; then
@@ -1566,59 +1547,49 @@ add_user_to_domain() {
     fi
     
     # Create Maildir structure
-    mkdir -p "$maildir_full/"{cur,new,tmp}
+    mkdir -p "$maildir_path/"{cur,new,tmp}
     chown -R "$sys_username:vmail" "$maildir_path"
     
     # Configure Dovecot quota
-    echo "quota_rule = *:storage=${quota_size}M" > "$maildir_path/.dovecot.quota"
-    chown "$sys_username:vmail" "$maildir_path/.dovecot.quota"
+    echo "quota_rule = *:storage=${quota_size}M" > "/var/mail/vmail/$domain/$username/.dovecot.quota"
+    chown "$sys_username:vmail" "/var/mail/vmail/$domain/$username/.dovecot.quota"
     
-    # Add to Postfix virtual maps (ensure clean file)
-    grep -v "^${email}[[:space:]]" /etc/postfix/virtual > /etc/postfix/virtual.tmp
-    echo "${email} $sys_username" >> /etc/postfix/virtual.tmp
+    # Postfix virtual mapping (clean existing entries first)
+    grep -v "^$email" /etc/postfix/virtual > /etc/postfix/virtual.tmp
+    echo "$email $sys_username" >> /etc/postfix/virtual.tmp
     mv /etc/postfix/virtual.tmp /etc/postfix/virtual
     postmap /etc/postfix/virtual
     
-    # Add to Roundcube database if Roundcube is installed
+    # Roundcube database setup (compatible with both old and new)
     if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
         local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
         local ROUNDCUBE_DB_USER="roundcube"
         local ROUNDCUBE_DB_NAME="roundcubemail"
         
-        # Define preferences
-        local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
-        
-        # Check if user already exists
+        # Check if user exists in either format
         USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
-            "SELECT user_id FROM users WHERE username='$sys_username' AND mail_host='localhost' LIMIT 1;")
+            "SELECT user_id FROM users WHERE (username='$username' AND mail_host='localhost') OR username='$email' LIMIT 1;")
         
         if [ -z "$USER_ID" ]; then
-            # Insert new user
+            # Insert new user with both formats for compatibility
             USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
                 "INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-                VALUES ('$sys_username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+                VALUES ('$email', '$domain', NOW(), NOW(), 'en_GB', 'a:0:{}');
                 SELECT LAST_INSERT_ID();")
             
-            # Insert identity
             mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e \
                 "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-                VALUES ('$USER_ID', NOW(), '0', '1', '$sys_username', 'localhost', '$email', '$email', '', '1');"
+                VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$email', '$email', '', '1');"
         fi
     fi
-
-    
     
     # Restart services
     systemctl restart postfix dovecot
-    
-    # Send welcome email
-    send_welcome_email "$email" "$username"
     
     echo "==============================================="
     echo "User successfully configured:"
     echo "Email: $email"
     echo "System username: $sys_username"
-    echo "Maildir: $maildir_full"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
