@@ -98,6 +98,9 @@ configure_dovecot_quota() {
 plugin {
   quota = maildir:User quota
   quota_rule = *:storage=1G
+  quota_rule2 = Trash:storage=+100M
+  quota_warning = storage=95%% quota-warning 95 %u
+  quota_warning2 = storage=80%% quota-warning 80 %u
 }
 
 protocol imap {
@@ -359,7 +362,7 @@ EOF
 
     # 7. Mail location configuration
     cat <<EOF > /etc/dovecot/conf.d/10-mail.conf
-mail_location = maildir:~/Maildir
+mail_location = maildir:/var/mail/vmail/%d/%n/Maildir
 namespace inbox {
   inbox = yes
 }
@@ -1495,13 +1498,19 @@ add_user_to_domain() {
     local email="$username@$domain"
 
     local domain_file="/usr/local/roundcube_mail_domain.txt"
+
+
     
     # Validate we have a domain
     if [ -z "$domain" ]; then
         echo "Error: No domains configured. Please add a domain first."
         return 1
     fi
-    
+        # Validate inputs
+    [ -z "$domain" ] && { echo "Error: No domain specified"; return 1; }
+    [ -z "$username" ] && { echo "Error: No username specified"; return 1; }
+
+
     # Verify domain exists
     if ! check_string_in_file "$domain_file" "$domain"; then
         echo "Error: Domain $domain does not exist."
@@ -1509,44 +1518,41 @@ add_user_to_domain() {
     fi
     
     echo "Using domain: $domain"
+
+        # Create system username (john@domain.com -> john_domain.com)
+    local sys_username=$(email_to_username "${username}@${domain}")
+    
+    # Create maildir path (/var/mail/vmail/domain.com/john/Maildir)
+    local maildir_path="/var/mail/vmail/$domain/$username/Maildir"
+
     
     # Create a simplified system username (letters and numbers only)
-    local clean_username=$(echo "$username" | tr -cd '[:alnum:]')
-    local clean_domain=$(echo "$domain" | awk -F. '{print $1}' | tr -cd '[:alnum:]')
-    local full_username=$username
-    
-    # Ensure username meets Linux requirements (max 32 chars, no special chars)
-   # full_username=$(echo "$full_username" | cut -c 1-32 | tr -cd '[:alnum:]_')
-    
-    # Create system user if not exists
-    if ! id "$full_username" >/dev/null 2>&1; then
-        if ! useradd -m -s /bin/bash "$full_username"; then
-            echo "Error: Failed to create system user $full_username"
-            return 1
-        fi
-        
-        if ! echo "$full_username:$password" | chpasswd; then
-            echo "Error: Failed to set password for $full_username"
-            userdel -r "$full_username" 2>/dev/null
-            return 1
-        fi
-        echo "System user $full_username created."
+    #local clean_username=$(echo "$username" | tr -cd '[:alnum:]')
+    #local clean_domain=$(echo "$domain" | awk -F. '{print $1}' | tr -cd '[:alnum:]')
+    #local full_username=$username
+
+        # Create system user if not exists
+    if ! id "$sys_username" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -g vmail -d "$maildir_path" "$sys_username"
+        echo "$sys_username:$password" | chpasswd
     fi
+
+
     
     # Create Maildir
-    mkdir -p "/home/$full_username/Maildir/"{cur,new,tmp}
-    chown -R "$full_username:$full_username" "/home/$full_username/Maildir" || {
+    mkdir -p "$maildir_path/"{cur,new,tmp}
+    chown -R "$sys_username:vmail" "$maildir_path" || {
         echo "Warning: Could not set Maildir permissions"
     }
     
     # Configure Dovecot quota
-    echo "quota_rule = *:storage=${quota_size}M" > "/home/$full_username/.dovecot.quota"
-    chown "$full_username:$full_username" "/home/$full_username/.dovecot.quota" || {
+    echo "quota_rule = *:storage=${quota_size}M" > "/var/mail/vmail/$domain/$username/.dovecot.quota"
+    chown "$sys_username:vmail" "/var/mail/vmail/$domain/$username/.dovecot.quota" || {
         echo "Warning: Could not set quota file permissions"
     }
     
     # Add to Postfix virtual maps
-    echo "$username@$domain $full_username" >> /etc/postfix/virtual
+    echo "${username}@${domain} $sys_username" >> /etc/postfix/virtual
     postmap /etc/postfix/virtual
     
     # Add to Roundcube database if Roundcube is installed
@@ -1591,7 +1597,7 @@ add_user_to_domain() {
     echo "==============================================="
     echo "User successfully configured !"
     echo "Email: $username@$domain"
-    echo "System username: $full_username"
+    echo "System username: $sys_username"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
