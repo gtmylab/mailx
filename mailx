@@ -1589,18 +1589,18 @@ add_user_to_domain() {
         local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
         
         # Check if user already exists
-        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se \
+        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
             "SELECT user_id FROM users WHERE username='$sys_username' AND mail_host='localhost' LIMIT 1;")
         
         if [ -z "$USER_ID" ]; then
             # Insert new user
-            USER_ID=$(mysql $ROUNDCUBE_DB_NAME  -se \
+            USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
                 "INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
                 VALUES ('$sys_username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
                 SELECT LAST_INSERT_ID();")
             
             # Insert identity
-            mysql $ROUNDCUBE_DB_NAME  -e \
+            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e \
                 "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
                 VALUES ('$USER_ID', NOW(), '0', '1', '$sys_username', 'localhost', '$email', '$email', '', '1');"
         fi
