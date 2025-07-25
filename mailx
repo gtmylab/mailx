@@ -1580,7 +1580,9 @@ add_user_to_domain() {
     postmap /etc/postfix/virtual
     
   
-
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
 
         ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
