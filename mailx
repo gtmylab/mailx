@@ -1602,6 +1602,13 @@ add_user_to_domain() {
     echo "==============================================="
 }
 
+# Convert email to valid Linux username
+email_to_username() {
+    local email=$1
+    # Replace @ with _, remove invalid chars, limit to 32 chars
+    echo "$email" | sed 's/@/_/g' | tr -cd '[:alnum:]_.-' | cut -c 1-32
+}
+
 clear
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
