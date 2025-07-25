@@ -1579,32 +1579,30 @@ add_user_to_domain() {
     mv /etc/postfix/virtual.tmp /etc/postfix/virtual
     postmap /etc/postfix/virtual
     
-    # Add to Roundcube database if Roundcube is installed
-    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
-        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-        local ROUNDCUBE_DB_USER="roundcube"
-        local ROUNDCUBE_DB_NAME="roundcubemail"
-        
-        # Define preferences
-        local ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
-        
-        # Check if user already exists
-        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se \
-            "SELECT user_id FROM users WHERE username='$email' AND mail_host='$domain' LIMIT 1;")
-        
-        if [ -z "$USER_ID" ]; then
-            # Insert new user
-            USER_ID=$(mysql $ROUNDCUBE_DB_NAME  -se \
-                "INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-                VALUES ('$email', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-                SELECT LAST_INSERT_ID();")
-            
-            # Insert identity
-            mysql $ROUNDCUBE_DB_NAME  -e \
-                "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-                VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$email', '$email', '', '1');"
-        fi
+  
+
+
+        ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+
+    # Insert new user and retrieve the auto-incremented ID
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
+    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$sys_username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+    SELECT LAST_INSERT_ID();
+    ")
+
+    # Check if USER_ID was retrieved successfully
+    if [ -z "$USER_ID" ]; then
+        echo "Failed to retrieve USER_ID. Aborting."
+        exit 1
     fi
+
+    # Insert into identities table
+    mysql $ROUNDCUBE_DB_NAME -e "
+    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+    VALUES ('$USER_ID', NOW(), '0', '1', '$sys_username', 'localhost', '$email', '$email', '', '1');
+    "
+
+
     
     # Restart services
     systemctl restart postfix dovecot
