@@ -98,9 +98,6 @@ configure_dovecot_quota() {
 plugin {
   quota = maildir:User quota
   quota_rule = *:storage=1G
-  quota_rule2 = Trash:storage=+100M
-  quota_warning = storage=95%% quota-warning 95 %u
-  quota_warning2 = storage=80%% quota-warning 80 %u
 }
 
 protocol imap {
@@ -287,42 +284,24 @@ generate_dkim() {
 
 
 configure_dovecot_sasl() {
-   # echo "=== COMPREHENSIVE DOVECOT CONFIGURATION ==="
+    echo "=== COMPREHENSIVE DOVECOT CONFIGURATION ==="
 
-    echo "Setting up Comprehensive Dovecot configuration..."
     # 1. Install required packages
-    apt_install dovecot-sieve dovecot-managesieved sasl2-bin -y
-    echo "[OK]"
+    apt-get install -y dovecot-sieve dovecot-managesieved sasl2-bin
 
-    # 2. Create vmail directory structure if it doesn't exist
-    if [ ! -d "/var/mail/vmail" ]; then
-        echo "Creating vmail directory structure..."
-        mkdir -p /var/mail/vmail
-        chmod 770 /var/mail/vmail
-    fi
-    echo "[OK]"
-
-    # 3. Create vmail user if not exists
+    # 2. Create vmail user if not exists
     if ! id vmail >/dev/null 2>&1; then
         echo "Creating vmail user..."
         groupadd -g 5000 vmail
-        useradd -g vmail -u 5000 vmail -d /var/mail/vmail
+        useradd -g vmail -u 5000 vmail -d /var/mail/vmail -m
         chown -R vmail:vmail /var/mail/vmail
-        chmod -R 770 /var/mail/vmail
-        
-    else
-        # Ensure permissions are correct if user already exists
-        chown -R vmail:vmail /var/mail/vmail
-        chmod -R 770 /var/mail/vmail
     fi
-    echo "[OK]"
 
     # 3. Create auth directory structure
     echo "Setting up auth directory..."
     mkdir -p /var/spool/postfix/private
     chown -R postfix:postfix /var/spool/postfix/private
     chmod -R 0750 /var/spool/postfix/private
-    echo "[OK]"
 
     # 4. Remove any existing auth socket/directory
     [ -e /var/spool/postfix/private/auth ] && rm -rf /var/spool/postfix/private/auth
@@ -385,7 +364,6 @@ namespace inbox {
   inbox = yes
 }
 EOF
-    echo "[OK]"
 
     # 8. Validate configuration
     echo "Validating configuration..."
@@ -393,7 +371,6 @@ EOF
         echo "Configuration validation failed!"
         exit 1
     fi
-    echo "[OK]"
 
     # 9. Restart Dovecot carefully
     echo "Restarting Dovecot..."
@@ -404,7 +381,6 @@ EOF
         journalctl -u dovecot -n 20 --no-pager
         exit 1
     fi
-    echo "[OK]"
 
     # 10. Verify socket creation
     echo "Verifying SASL socket..."
@@ -416,12 +392,11 @@ EOF
         journalctl -u dovecot -n 20 --no-pager
         exit 1
     fi
-    echo "[OK]"
 
     # 11. Restart Postfix
     systemctl restart postfix
 
-   # echo "=== DOVECOT CONFIGURATION COMPLETE ==="
+    echo "=== DOVECOT CONFIGURATION COMPLETE ==="
 }
 
 verify_postfix_dovecot_connection() {
@@ -1378,335 +1353,6 @@ EOF
     echo "4. Update port forwarding rules if behind NAT"
 }
 
-# Function to add a new domain
-add_domain() {
-    local domain=$1
-    local domain_file="/usr/local/roundcube_mail_domain.txt"
-    
-    # Check if domain already exists
-    if check_string_in_file "$domain_file" "$domain"; then
-        echo "Domain $domain already exists."
-        return 1
-    fi
-    
-    # Add domain to file
-    echo "$domain" >> "$domain_file"
-    echo "Domain $domain added successfully."
-    
-    # Update Postfix configuration for multiple domains
-    update_postfix_for_multiple_domains
-    
-    return 0
-}
-
-# Function to remove a domain
-remove_domain() {
-    local domain=$1
-    local domain_file="/usr/local/roundcube_mail_domain.txt"
-    local temp_file=$(mktemp)
-    
-    # Check if this is the last domain
-    local domain_count=$(wc -l < "$domain_file")
-    if [ "$domain_count" -le 1 ]; then
-        echo "Cannot remove the last domain. At least one domain must remain."
-        return 1
-    fi
-    
-    # Check if domain exists
-    if ! check_string_in_file "$domain_file" "$domain"; then
-        echo "Domain $domain does not exist."
-        return 1
-    fi
-    
-    # Remove domain from file
-    grep -v "^$domain$" "$domain_file" > "$temp_file"
-    mv "$temp_file" "$domain_file"
-    
-    echo "Domain $domain removed successfully."
-    
-    # Update Postfix configuration for multiple domains
-    update_postfix_for_multiple_domains
-    
-    return 0
-}
-
-# Function to update Postfix for multiple domains
-update_postfix_for_multiple_domains() {
-    local domain_file="/usr/local/roundcube_mail_domain.txt"
-    local domains=$(cat "$domain_file" | tr '\n' ' ')
-    
-    # Update virtual_alias_domains in main.cf
-    if grep -q "^virtual_alias_domains" /etc/postfix/main.cf; then
-        sed -i "s/^virtual_alias_domains = .*/virtual_alias_domains = $domains/" /etc/postfix/main.cf
-    else
-        echo "virtual_alias_domains = $domains" >> /etc/postfix/main.cf
-    fi
-    
-    # Update mydestination to include all domains
-    if grep -q "^mydestination" /etc/postfix/main.cf; then
-        sed -i "s/^mydestination = .*/mydestination = \$myhostname, localhost.\$mydomain, localhost, $domains/" /etc/postfix/main.cf
-    else
-        echo "mydestination = \$myhostname, localhost.\$mydomain, localhost, $domains" >> /etc/postfix/main.cf
-    fi
-    
-    # Reload Postfix
-    postfix reload
-}
-
-# Function to remove a user from a domain
-remove_user_from_domain() {
-    local username=$1
-    local domain=$2
-    
-    # Verify domain exists
-    if ! check_string_in_file "/usr/local/roundcube_mail_domain.txt" "$domain"; then
-        echo "Error: Domain $domain does not exist."
-        return 1
-    fi
-    
-    local full_username="${username}_${domain//./_}"
-    local email="$username@$domain"
-    
-    # Check if user exists
-    if ! id "$full_username" >/dev/null 2>&1; then
-        echo "Error: User $full_username does not exist."
-        return 1
-    fi
-    
-    # Remove from Postfix virtual maps
-    sed -i "/^$email/d" /etc/postfix/virtual
-    postmap /etc/postfix/virtual
-    
-    # Remove from Roundcube database if Roundcube is installed
-    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
-        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-        local ROUNDCUBE_DB_USER="roundcube"
-        local ROUNDCUBE_DB_NAME="roundcubemail"
-        
-        # Get user ID from Roundcube
-        local USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se "
-        SELECT user_id FROM users WHERE username='$email' AND mail_host='$domain';
-        ")
-        
-        if [ -n "$USER_ID" ]; then
-            # Delete from identities table first (foreign key constraint)
-            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
-            DELETE FROM identities WHERE user_id='$USER_ID';
-            "
-            
-            # Then delete from users table
-            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e "
-            DELETE FROM users WHERE user_id='$USER_ID';
-            "
-        fi
-    fi
-    
-    # Delete system user and home directory
-    userdel -r "$full_username" 2>/dev/null || true
-    
-    # Restart services
-    systemctl restart postfix dovecot
-    
-    echo "User $email removed successfully."
-}
-
-# Convert email to valid Linux username
-email_to_username() {
-    local email=$1
-    # Replace @ with _, remove invalid chars, limit to 32 chars
-    echo "$email" | sed 's/@/_/g' | tr -cd '[:alnum:]_.-' | cut -c 1-32
-}
-
-# Function to add a user (with optional domain and quota)
-
-
-# Function to add a user (with optional domain and quota)
-add_user_to_domain() {
-    local username=$1
-    local password=$2
-    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt")}
-    local quota_size=${4:-1000}
-    
-    # Fallback to simple username format (compatible with original setup)
-    local full_username="$username"
-    local maildir_path="/home/$full_username/Maildir"
-    local email="$username@$domain"
-
-    # Validate inputs
-    [ -z "$domain" ] && { echo "Error: No domain specified"; return 1; }
-    [ -z "$username" ] && { echo "Error: No username specified"; return 1; }
-
-    # Create system user if not exists
-    if ! id "$full_username" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash "$full_username"
-        echo "$full_username:$password" | chpasswd
-    fi
-
-    # Create Maildir structure (original format)
-    mkdir -p "$maildir_path/"{cur,new,tmp}
-    chown -R "$full_username:$full_username" "$maildir_path"
-
-    # Configure Dovecot quota
-    echo "quota_rule = *:storage=${quota_size}M" > "/home/$full_username/.dovecot.quota"
-    chown "$full_username:$full_username" "/home/$full_username/.dovecot.quota"
-
-    # Postfix virtual mapping (original format)
-    grep -v "^$email" /etc/postfix/virtual > /etc/postfix/virtual.tmp
-    echo "$email $full_username" >> /etc/postfix/virtual.tmp
-    mv /etc/postfix/virtual.tmp /etc/postfix/virtual
-    postmap /etc/postfix/virtual
-
-    # Roundcube database setup (original format)
-    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
-        local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-        local ROUNDCUBE_DB_USER="roundcube"
-        local ROUNDCUBE_DB_NAME="roundcubemail"
-        
-        # Check if user exists
-        USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
-            "SELECT user_id FROM users WHERE username='$username' AND mail_host='localhost' LIMIT 1;")
-        
-        if [ -z "$USER_ID" ]; then
-            # Insert new user (original format)
-            USER_ID=$(mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -se \
-                "INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-                VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', 'a:0:{}');
-                SELECT LAST_INSERT_ID();")
-            
-            mysql $ROUNDCUBE_DB_NAME -u $ROUNDCUBE_DB_USER -p$ROUNDCUBE_DB_PASSWORD -e \
-                "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-                VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');"
-        fi
-    fi
-
-    # Restart services
-    systemctl restart postfix dovecot
-
-    echo "==============================================="
-    echo "User successfully configured (compatibility mode):"
-    echo "Email: $email"
-    echo "System username: $full_username"
-    echo "Quota: ${quota_size}M"
-    echo "Maildir: $maildir_path"
-    echo "==============================================="
-}
-
-
-
-add_user_to_domainX() {
-    local username=$1
-    local password=$2
-    local domain=${3:-$(head -n 1 "/usr/local/roundcube_mail_domain.txt" 2>/dev/null)}
-    local quota_size=${4:-1000}
-    local email="$username@$domain"
-
-    local domain_file="/usr/local/roundcube_mail_domain.txt"
-
-
-    
-    # Validate we have a domain
-    if [ -z "$domain" ]; then
-        echo "Error: No domains configured. Please add a domain first."
-        return 1
-    fi
-        # Validate inputs
-    [ -z "$domain" ] && { echo "Error: No domain specified"; return 1; }
-    [ -z "$username" ] && { echo "Error: No username specified"; return 1; }
-
-
-    # Verify domain exists
-    if ! check_string_in_file "$domain_file" "$domain"; then
-        echo "Error: Domain $domain does not exist."
-        return 1
-    fi
-    
-    echo "Using domain: $domain"
-
-        # Create system username (john@domain.com -> john_domain.com)
-    local sys_username=$(email_to_username "${username}@${domain}")
-    
-    # Create maildir path (/var/mail/vmail/domain.com/john/Maildir)
-    local maildir_path="/var/mail/vmail/$domain/$username/Maildir"
-
-    
-    # Create a simplified system username (letters and numbers only)
-    #local clean_username=$(echo "$username" | tr -cd '[:alnum:]')
-    #local clean_domain=$(echo "$domain" | awk -F. '{print $1}' | tr -cd '[:alnum:]')
-    #local full_username=$username
-
-        # Create system user if not exists
-    if ! id "$sys_username" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash -g vmail -d "$maildir_path" "$sys_username"
-        echo "$sys_username:$password" | chpasswd
-    fi
-
-
-    
-    # Create Maildir
-    mkdir -p "$maildir_path/"{cur,new,tmp}
-    chown -R "$sys_username:vmail" "$maildir_path" || {
-        echo "Warning: Could not set Maildir permissions"
-    }
-    
-    # Configure Dovecot quota
-    echo "quota_rule = *:storage=${quota_size}M" > "/var/mail/vmail/$domain/$username/.dovecot.quota"
-    chown "$sys_username:vmail" "/var/mail/vmail/$domain/$username/.dovecot.quota" || {
-        echo "Warning: Could not set quota file permissions"
-    }
-    
-    # Add to Postfix virtual maps
-    echo "${username}@${domain} $sys_username" >> /etc/postfix/virtual
-    postmap /etc/postfix/virtual
-    
-    # Add to Roundcube database if Roundcube is installed
-  #  if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
-    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-    local ROUNDCUBE_DB_USER="roundcube"
-    local ROUNDCUBE_DB_NAME="roundcubemail"
-
-        
-        # Define the ROUNDCUBE_PREFERENCE variable
-    # Define the ROUNDCUBE_PREFERENCE variable
-    # Define the ROUNDCUBE_PREFERENCE variable
-    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
-
-    # Insert new user and retrieve the auto-incremented ID
-    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "
-    INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-    SELECT LAST_INSERT_ID();
-    ")
-
-    # Check if USER_ID was retrieved successfully
-    if [ -z "$USER_ID" ]; then
-        echo "Failed to retrieve USER_ID. Aborting."
-        exit 1
-    fi
-
-    # Insert into identities table
-    mysql $ROUNDCUBE_DB_NAME -e "
-    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-    VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');
-    "
-
-
-   # fi
-    
-    # Restart services
-    systemctl restart postfix dovecot
-    
-    # Send welcome email
-    send_welcome_email "$username@$domain" "$username"
-    
-    echo "==============================================="
-    echo "User successfully configured !"
-    echo "Email: $username@$domain"
-    echo "System username: $sys_username"
-    echo "Quota: ${quota_size}M"
-    echo "==============================================="
-}
-
-
-
 clear
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
@@ -1719,7 +1365,6 @@ fi
 
 
 # Select an option
-# Select an option
 echo "Select an option:"
 echo "1. Install MailX"
 echo "2. Add MailX User"
@@ -1728,12 +1373,8 @@ echo "4. Uninstall Roundcube"
 echo "5. Uninstall MailX"
 echo "6. Change Domain"
 echo "7. Change SMTP port"
-echo "8. Add Email Domain"
-echo "9. Remove Email Domain"
-echo "10. Add User to Domain"
-echo "11. Remove User from Domain"
 
-read -p "Enter your choice (1-11): " choice
+read -p "Enter your choice (1, 2, 3, 4, 5, 6 or 7): " choice
 
 
 case $choice in
@@ -1851,44 +1492,6 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         # Set custom SMTP port for Postfix
         set_postfix_custom_port
         ;;
-
-            
-    8)
-        read -p "Enter domain to add (e.g., example.com): " new_domain
-        add_domain "$new_domain"
-        ;;
-        
-    9)
-        read -p "Enter domain to remove (e.g., example.com): " domain_to_remove
-        remove_domain "$domain_to_remove"
-        ;;
-        
-    10)
-        read -p "Enter username: " username
-        read -p "Enter domain (leave blank for default): " domain
-        read -sp "Enter password: " password
-        echo
-        read -p "Enter quota in MB (default 1000): " quota
-        
-        # Call the function with proper parameter ordering
-        if [ -z "$domain" ] && [ -z "$quota" ]; then
-            add_user_to_domain "$username" "$password"
-        elif [ -z "$domain" ]; then
-            add_user_to_domain "$username" "$password" "" "$quota"
-        elif [ -z "$quota" ]; then
-            add_user_to_domain "$username" "$password" "$domain"
-        else
-            add_user_to_domain "$username" "$password" "$domain" "$quota"
-        fi
-        ;;
-        
-    11)
-        read -p "Enter username: " username
-        read -p "Enter domain: " domain
-        
-        remove_user_from_domain "$username" "$domain"
-        ;;
-        
 
     *)
         echo "Invalid choice. Exiting."
