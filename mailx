@@ -533,9 +533,19 @@ echo "Installing Apache (web server)..."
 apt_install apache2
     echo "[OK]"
 # Ensure Apache directory exists
+#if [ ! -d "/etc/apache2" ]; then
+#    echo "Error: Apache installation failed - /etc/apache2 not created"
+ #   exit 1
+#fi
+
+# Check if /etc/apache2 exists
 if [ ! -d "/etc/apache2" ]; then
-    echo "Error: Apache installation failed - /etc/apache2 not created"
-    exit 1
+    echo "Apache configs missing! Reinstalling..."
+    apt-get install --reinstall -y apache2
+    if [ ! -d "/etc/apache2" ]; then
+        echo "FATAL: Apache still missing configs. Manual fix required."
+        exit 1
+    fi
 fi
 
 # Proceed with configuration
