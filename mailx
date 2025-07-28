@@ -925,20 +925,25 @@ uninstall_all() {
     systemctl stop mysql
 
     # Remove packages
-    sudo apt-get -y remove --purge postfix apache2 php* roundcube mysql-server mysql-client mysql-common mysql-server-core-* mysql-client-core-* > /dev/null
+    sudo apt-get -y remove --purge postfix dovecot apache2 php*  opendkim opendkim-tools mysql-server mysql-client mysql-common mysql-server-core-* mysql-client-core-* > /dev/null
     sudo apt-get -y remove --purge mysql-server mysql-client mysql-common > /dev/null
 
     # Remove configuration files
     sudo rm -rf /var/lib/mysql
     sudo rm -rf /etc/mysql /var/lib/mysql /var/log/mysql*
     rm -rf /etc/postfix
+    rm -rf /etc/dovecot
+    rm -rf  /var/spool/postfix*
     rm -rf /etc/mysql
     rm -rf /etc/apache2
-    rm -rf /etc/roundcube
     rm -rf /var/www/html/roundcube
     rm -rf /var/www/html/phpmyadmin
     rm -rf /var/www/html/mailx
+    rm -rf /var/www/html/adminportal
+    rm -rf /var/www/html/.well-known/acme-challenge
+    rm -rf /var/mail/vmail
     sudo deluser mysql
+    sudo deluser vmail
     sudo delgroup mysql
     echo '[OK]'
     echo "Cleaning up system MailX System files..."
