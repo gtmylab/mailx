@@ -512,8 +512,6 @@ EOF
     configure_dovecot_quota
     configure_dovecot_sasl
 
-    # After Postfix installation
-    setup_postfix_header_checks "$HOSTNAME"
 
     # 3. Restart services
     systemctl restart dovecot postfix
@@ -813,6 +811,13 @@ systemctl restart apache2 postfix dovecot
 
     # Update Postfix configurations
     update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
+
+    
+    # After Postfix installation
+    setup_postfix_header_checks "$HOSTNAME"
+
+    systemctl restart apache2 postfix dovecot
+
 
    # Call the generate_dkim function
     generate_dkim
