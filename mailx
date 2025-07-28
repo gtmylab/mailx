@@ -914,27 +914,27 @@ uninstall_roundcube() {
 
 # Function to uninstall Postfix, MySQL, and Roundcube
 uninstall_all() {
-
     echo "Uninstalling Postfix, MySQL, and Roundcube..."
-    # Call function to uninstall Roundcube database and user
+    
+    # First stop services
+    systemctl stop postfix dovecot apache2 mysql
+
+    # Completely purge Dovecot
+    apt-get -y remove --purge dovecot-*
+    rm -rf /etc/dovecot
+
+    # Rest of your uninstall code...
     uninstall_roundcube
-
-    # Stop services
-    systemctl stop postfix
-    systemctl stop apache2
-    systemctl stop mysql
-
+    
     # Remove packages
-    sudo apt-get -y remove --purge postfix dovecot apache2 php*  opendkim opendkim-tools mysql-server mysql-client mysql-common mysql-server-core-* mysql-client-core-* > /dev/null
+    sudo apt-get -y remove --purge postfix apache2 php* opendkim opendkim-tools mysql-server mysql-client mysql-common mysql-server-core-* mysql-client-core-* > /dev/null
     sudo apt-get -y remove --purge mysql-server mysql-client mysql-common > /dev/null
-
+    
     # Remove configuration files
     sudo rm -rf /var/lib/mysql
     sudo rm -rf /etc/mysql /var/lib/mysql /var/log/mysql*
     rm -rf /etc/postfix
-    rm -rf /etc/dovecot
-    rm -rf  /var/spool/postfix*
-    rm -rf /etc/mysql
+    rm -rf /var/spool/postfix*
     rm -rf /etc/apache2
     rm -rf /var/www/html/roundcube
     rm -rf /var/www/html/phpmyadmin
@@ -945,13 +945,11 @@ uninstall_all() {
     sudo deluser mysql
     sudo deluser vmail
     sudo delgroup mysql
-    echo '[OK]'
+    
     echo "Cleaning up system MailX System files..."
     sudo apt-get -y clean > /dev/null
     sudo apt-get -y autoremove > /dev/null
     sudo apt-get -y autoclean > /dev/null
-
-    echo '[OK]'
 
     echo "Uninstallation completed."
 }
