@@ -527,13 +527,11 @@ EOF
         apt_install opendkim opendkim-tools
         echo "[OK]"
     fi
-    echo "Installing Apache (web server)..."
-    echo "[OK]"
 
     # Install Apache
 echo "Installing Apache (web server)..."
 apt_install apache2
-
+    echo "[OK]"
 # Ensure Apache directory exists
 if [ ! -d "/etc/apache2" ]; then
     echo "Error: Apache installation failed - /etc/apache2 not created"
