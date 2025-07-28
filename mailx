@@ -981,6 +981,10 @@ uninstall_all() {
     sudo apt-get -y autoremove > /dev/null
     sudo apt-get -y autoclean > /dev/null
 
+    apt-get -f install
+    apt-get autoremove
+    apt-get update
+
     echo "Uninstallation completed."
 }
 
