@@ -205,23 +205,51 @@ update_postfix_config() {
     done
     echo "[OK] Backups created in $backup_dir"
 
-    echo "Downloading customized Postfix configuration files..."
-    # Download configuration files with error handling
-    declare -A config_urls=(
-        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"
-        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"
-    )
+echo "Downloading customized Postfix configuration files..."
+# Download configuration files with enhanced error handling and debugging
+declare -A config_urls=(
+    ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"
+    ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"
+)
 
-    for file in "${!config_urls[@]}"; do
-        wget -q --timeout=10 --tries=3 -O "${config_dir}/${file}" "${config_urls[$file]}" || {
-            echo "[ERROR] Failed to download ${file} from ${config_urls[$file]}" >&2
-            # Restore from backup if download fails
-            if [[ -f "${backup_dir}/${file}.bak_${timestamp}" ]]; then
-                cp -p "${backup_dir}/${file}.bak_${timestamp}" "${config_dir}/${file}"
-            fi
+for file in "${!config_urls[@]}"; do
+    url="${config_urls[$file]}"
+    echo "Attempting to download $file from $url"
+    
+    # First check if URL is reachable
+    if ! wget -q --spider --timeout=10 "$url"; then
+        echo "[ERROR] URL $url is not reachable or server is not responding" >&2
+        echo "Debug info:"
+        curl -Iv "$url" 2>&1 | grep -E 'HTTP|<'
+        return 1
+    fi
+
+    # Now attempt the download with verbose output
+    if ! wget --no-verbose --show-progress --timeout=20 --tries=3 -O "${config_dir}/${file}.tmp" "$url"; then
+        echo "[ERROR] Download failed for $file from $url" >&2
+        echo "Possible reasons:"
+        echo "1. Network connectivity issues"
+        echo "2. GitHub might be rate limiting your IP"
+        echo "3. Repository or file might not be publicly accessible"
+        
+        # Additional debug info
+        echo "Trying alternative method with curl:"
+        if ! curl -v -L -o "${config_dir}/${file}.tmp" "$url"; then
+            echo "[ERROR] Curl also failed to download the file" >&2
             return 1
-        }
-    done
+        fi
+    fi
+
+    # Verify the downloaded file isn't empty
+    if [[ ! -s "${config_dir}/${file}.tmp" ]]; then
+        echo "[ERROR] Downloaded file is empty: ${config_dir}/${file}.tmp" >&2
+        return 1
+    fi
+
+    # If we got here, the download succeeded
+    mv "${config_dir}/${file}.tmp" "${config_dir}/${file}"
+    echo "[OK] Successfully downloaded $file"
+done
     echo "[OK] Configuration files downloaded"
 
     echo "Replacing Postfix placeholders with actual values..."
