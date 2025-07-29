@@ -20,9 +20,13 @@ mynetworks_style = host
 # Mailbox settings
 mailbox_size_limit = 0
 recipient_delimiter = +
+home_mailbox = Maildir/
 virtual_alias_maps = hash:/etc/postfix/virtual
 virtual_alias_domains = hash:/etc/postfix/virtual_domains
 
+# Mail delivery protocol (CRITICAL)
+mailbox_command = /usr/lib/dovecot/deliver
+virtual_transport = lmtp:unix:private/dovecot-lmtp
 
 # TLS configuration
 smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
@@ -38,7 +42,7 @@ smtpd_sasl_auth_enable = yes
 smtpd_sasl_type = dovecot
 smtpd_sasl_path = private/auth
 smtpd_sasl_security_options = noanonymous
-smtpd_sasl_local_domain = $myhostname
+#smtpd_sasl_local_domain = $myhostname
 broken_sasl_auth_clients = yes
 
 # Restrictions
@@ -46,11 +50,21 @@ smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, defer_u
 smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination
 
 # Performance
-maximal_queue_lifetime = 1d
+
+# Connection limits
+smtpd_client_connection_limit = 100
+
+#maximal_queue_lifetime = 1d
 bounce_queue_lifetime = 1d
 maximal_backoff_time = 4000s
 minimal_backoff_time = 300s
 smtp_recipient_limit = 1000
+maximal_queue_lifetime = 6h
+qmgr_message_active_limit = 100000
+
+# Caching
+smtp_connection_cache_on_demand = yes
+smtp_connection_cache_time_limit = 2s
 
 # Bulk email settings
 default_process_limit = 100
