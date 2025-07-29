@@ -21,6 +21,8 @@ mynetworks_style = host
 mailbox_size_limit = 0
 recipient_delimiter = +
 virtual_alias_maps = hash:/etc/postfix/virtual
+virtual_alias_domains = hash:/etc/postfix/virtual_domains
+
 
 # TLS configuration
 smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
@@ -56,14 +58,32 @@ smtp_connection_cache_on_demand = no
 smtp_connection_cache_time_limit = 2s
 
 # Hide original client IP and show only your mail server's IP
-smtpd_client_restrictions = permit_mynetworks, reject
+#smtpd_client_restrictions = permit_mynetworks, reject
+
+# Replace smtpd_client_restrictions with: NEW FIX
+smtpd_client_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unknown_client_hostname,
+    reject_rbl_client zen.spamhaus.org,
+    reject_rbl_client bl.spamcop.net,
+    permit
+
 smtpd_proxy_options = speed_adjust
 local_header_rewrite_clients = permit_mynetworks
 smtpd_sender_login_maps = hash:/etc/postfix/virtual
 
 # Set proper HELO/EHLO name
 smtpd_helo_required = yes
-smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname
+#smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname
+
+# Replace existing smtpd_helo_restrictions with: NEW FIX
+smtpd_helo_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_non_fqdn_helo_hostname,
+    reject_invalid_helo_hostname,
+    check_helo_access hash:/etc/postfix/helo_access,
+    permit
 
 header_checks = regexp:/etc/postfix/header_checks
-
