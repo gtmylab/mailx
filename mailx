@@ -170,36 +170,123 @@ update_postfix_maincf() {
 }
 
 
+
 # Function to update Postfix configuration files
 update_postfix_config() {
-    local domain=$1
-    local hostname=$2
+    local domain="$1"
+    local hostname="$2"
+    local config_dir="/etc/postfix"
+    local backup_dir="${config_dir}/backups"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    
+    # Validate inputs
+    if [[ -z "$domain" || -z "$hostname" ]]; then
+        echo "[ERROR] Domain and hostname must be provided" >&2
+        return 1
+    fi
 
-    echo "Downloading customized Postfix configuration files....."
+    echo "Starting Postfix configuration update for domain: $domain, hostname: $hostname"
 
-    # Backup original configuration files
-    cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
-    cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
+    # Create backup directory if it doesn't exist
+    mkdir -p "$backup_dir" || {
+        echo "[ERROR] Failed to create backup directory $backup_dir" >&2
+        return 1
+    }
 
-    # Download customized Postfix configuration files
-    wget -qO /etc/postfix/main.cf https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf
-    wget -qO /etc/postfix/master.cf https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf
-    echo "[OK]"
+    echo "Backing up original configuration files..."
+    # Backup original configuration files with timestamp
+    for file in main.cf master.cf; do
+        if [[ -f "${config_dir}/${file}" ]]; then
+            cp -p "${config_dir}/${file}" "${backup_dir}/${file}.bak_${timestamp}" || {
+                echo "[ERROR] Failed to backup ${file}" >&2
+                return 1
+            }
+        fi
+    done
+    echo "[OK] Backups created in $backup_dir"
+
+    echo "Downloading customized Postfix configuration files..."
+    # Download configuration files with error handling
+    declare -A config_urls=(
+        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"
+        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"
+    )
+
+    for file in "${!config_urls[@]}"; do
+        wget -q --timeout=10 --tries=3 -O "${config_dir}/${file}" "${config_urls[$file]}" || {
+            echo "[ERROR] Failed to download ${file} from ${config_urls[$file]}" >&2
+            # Restore from backup if download fails
+            if [[ -f "${backup_dir}/${file}.bak_${timestamp}" ]]; then
+                cp -p "${backup_dir}/${file}.bak_${timestamp}" "${config_dir}/${file}"
+            fi
+            return 1
+        }
+    done
+    echo "[OK] Configuration files downloaded"
 
     echo "Replacing Postfix placeholders with actual values..."
+    # Replace placeholders in all config files
+    for file in main.cf master.cf; do
+        if [[ -f "${config_dir}/${file}" ]]; then
+            sed -i.bak "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$hostname/g" "${config_dir}/${file}" || {
+                echo "[ERROR] Failed to update ${file}" >&2
+                return 1
+            }
+        fi
+    done
+    echo "[OK] Placeholders replaced"
 
-    # Replace placeholders with actual values in Postfix configuration files
-    sed -i "s/{EMAIL_DOMAIN}/$domain/g" /etc/postfix/main.cf 2>/dev/null
-    sed -i "s/{EMAIL_DOMAIN}/$domain/g" /etc/postfix/master.cf 2>/dev/null
-    sed -i "s/{HOSTNAME}/$hostname/g" /etc/postfix/main.cf 2>/dev/null
-    sed -i "s/{HOSTNAME}/$hostname/g" /etc/postfix/master.cf 2>/dev/null
-    echo "[OK]"
+    # Function to create and postmap access files
+    create_access_file() {
+        local file_path="$1"
+        local content="$2"
+        
+        # Create parent directory if needed
+        mkdir -p "$(dirname "$file_path")" || {
+            echo "[ERROR] Failed to create directory for $file_path" >&2
+            return 1
+        }
 
-    echo "Postfix configuration updated..."
-    # Restart Postfix to apply changes
-    restart_service postfix
-    echo "[OK]"
+        # Create file if it doesn't exist
+        if [[ ! -f "$file_path" ]]; then
+            echo "$content" > "$file_path" || {
+                echo "[ERROR] Failed to create $file_path" >&2
+                return 1
+            }
+            postmap "$file_path" || {
+                echo "[ERROR] Failed to postmap $file_path" >&2
+                return 1
+            }
+            echo "[OK] Created and mapped $file_path"
+        else
+            echo "[SKIP] $file_path already exists"
+        fi
+    }
 
+    echo "Configuring HELO access and virtual domains..."
+    # Create access files
+    create_access_file "${config_dir}/helo_access" \
+        "$hostname OK\n.$domain OK" || return 1
+
+    create_access_file "${config_dir}/virtual_domains" \
+        "$domain OK" || return 1
+
+    echo "Validating Postfix configuration..."
+    # Check configuration before restarting
+    if ! postfix check; then
+        echo "[ERROR] Postfix configuration check failed" >&2
+        return 1
+    fi
+
+    echo "Restarting Postfix service..."
+    # Restart Postfix with error handling
+    if ! restart_service postfix; then
+        echo "[ERROR] Failed to restart Postfix service" >&2
+        return 1
+    fi
+
+    echo "[SUCCESS] Postfix configuration completed successfully"
+    return 0
 }
 
 
