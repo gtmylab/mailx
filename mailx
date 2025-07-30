@@ -1074,7 +1074,7 @@ add_roundcube_user() {
     local username=$1
     local password=$2
     local quota_size=$3
-    local domain=$4
+    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local email="$username@$domain"
     
     # Database credentials
