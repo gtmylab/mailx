@@ -475,8 +475,25 @@ EOF
     # 7. Mail location configuration
     cat <<EOF > /etc/dovecot/conf.d/10-mail.conf
 mail_location = maildir:~/Maildir
+
 namespace inbox {
   inbox = yes
+  mailbox Drafts {
+    auto = subscribe
+    special_use = \Drafts
+  }
+  mailbox Junk {
+    auto = subscribe
+    special_use = \Junk
+  }
+  mailbox Sent {
+    auto = subscribe
+    special_use = \Sent
+  }
+  mailbox Trash {
+    auto = subscribe
+    special_use = \Trash
+  }
 }
 EOF
 
@@ -988,7 +1005,7 @@ systemctl restart apache2 postfix dovecot
 }
 
 # Function to add a new Roundcube user
-add_roundcube_user() {
+add_roundcube_userOLD() {
     local username=$1
     local password=$2
     local quota_size=$3
@@ -1048,6 +1065,76 @@ add_roundcube_user() {
     echo "User successfully configured:"
     echo "Email: $email"
     echo "Username: $username"
+    echo "Quota: ${quota_size}M"
+    echo "==============================================="
+}
+
+
+add_roundcube_user() {
+    local username=$1
+    local password=$2
+    local quota_size=$3
+    local domain=$4
+    local email="$username@$domain"
+    
+    # Database credentials
+    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
+    
+    # 1. VIRTUAL USER CREATION (Recommended Approach)
+    local vmail_dir="/var/vmail"
+    local maildir_path="$vmail_dir/$domain/$username"
+    
+    # Create mail directory
+    mkdir -p "$maildir_path"/{cur,new,tmp}
+    chown -R vmail:vmail "$vmail_dir"
+    
+    # 2. POSTFIX CONFIGURATION
+    # Add to virtual maps
+    echo "$email $username@$domain" >> /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+    
+    # 3. DOVECOT CONFIGURATION
+    # Password file (if using passwd-file)
+    local dovecot_passwd_file="/etc/dovecot/users/$domain.passwd"
+    mkdir -p "$(dirname "$dovecot_passwd_file")"
+    
+    # Generate hashed password
+    local hashed_pw=$(doveadm pw -s SHA512-CRYPT -p "$password")
+    
+    echo "$email:$hashed_pw::::::" >> "$dovecot_passwd_file"
+    
+    # 4. ROUNDCUBE CONFIGURATION
+    # Using full email as username
+    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+    
+    # Insert user with email as username
+    USER_ID=$(mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -se "
+    INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
+    VALUES ('$email', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
+    SELECT LAST_INSERT_ID();
+    ")
+    
+    # Add identity
+    mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -e "
+    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
+    VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$email', '$email', '', '1');
+    "
+    
+    # 5. QUOTA CONFIGURATION
+    echo "$email:$domain:$username::${quota_size}M" >> /etc/dovecot/quotas
+    
+    # 6. RESTART SERVICES
+    systemctl restart postfix dovecot
+    
+    # 7. SEND WELCOME EMAIL
+    send_welcome_email "$email" "$username"
+    
+    echo "==============================================="
+    echo "User successfully configured:"
+    echo "Email: $email"
+    echo "Maildir: $maildir_path"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
@@ -1516,6 +1603,145 @@ EOF
     echo "4. Update port forwarding rules if behind NAT"
 }
 
+# Function to add a new domain
+add_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local helo_access_file="/etc/postfix/helo_access"
+    local virtual_domains_file="/etc/postfix/virtual_domains"
+    
+    # Validate domain format
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        echo "Error: Invalid domain format: $domain"
+        return 1
+    fi
+    
+    # Check if domain already exists
+    if check_string_in_file "$domain_file" "$domain"; then
+        echo "Domain $domain already exists."
+        return 1
+    fi
+    
+    # Add domain to tracking file
+    echo "$domain" >> "$domain_file"
+    
+    # Update HELO access file
+    if [ ! -f "$helo_access_file" ]; then
+        touch "$helo_access_file"
+        chmod 640 "$helo_access_file"
+        chown root:postfix "$helo_access_file"
+    fi
+    
+    # Add domain to HELO access
+    if ! grep -qF ".$domain OK" "$helo_access_file"; then
+        echo ".$domain OK" >> "$helo_access_file"
+        postmap "$helo_access_file"
+    fi
+    
+    # Update virtual domains file
+    if [ ! -f "$virtual_domains_file" ]; then
+        touch "$virtual_domains_file"
+        chmod 640 "$virtual_domains_file"
+        chown root:postfix "$virtual_domains_file"
+    fi
+    
+    # Add domain to virtual domains
+    if ! grep -qF "$domain OK" "$virtual_domains_file"; then
+        echo "$domain OK" >> "$virtual_domains_file"
+        postmap "$virtual_domains_file"
+    fi
+    
+    # Update main Postfix configuration
+    update_postfix_for_multiple_domains
+    
+    echo "Domain $domain added successfully to all configurations."
+    return 0
+}
+
+# Function to remove a domain
+remove_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local helo_access_file="/etc/postfix/helo_access"
+    local virtual_domains_file="/etc/postfix/virtual_domains"
+    local temp_file=$(mktemp)
+    
+    # Check if this is the last domain
+    local domain_count=$(wc -l < "$domain_file" | tr -d ' ')
+    if [ "$domain_count" -le 1 ]; then
+        echo "Cannot remove the last domain. At least one domain must remain."
+        return 1
+    fi
+    
+    # Check if domain exists
+    if ! check_string_in_file "$domain_file" "$domain"; then
+        echo "Domain $domain does not exist."
+        return 1
+    fi
+    
+    # Remove domain from tracking file
+    grep -v "^$domain$" "$domain_file" > "$temp_file"
+    mv "$temp_file" "$domain_file"
+    
+    # Remove from HELO access if exists
+    if [ -f "$helo_access_file" ]; then
+        grep -vF ".$domain OK" "$helo_access_file" > "$temp_file"
+        mv "$temp_file" "$helo_access_file"
+        postmap "$helo_access_file"
+    fi
+    
+    # Remove from virtual domains if exists
+    if [ -f "$virtual_domains_file" ]; then
+        grep -vF "$domain OK" "$virtual_domains_file" > "$temp_file"
+        mv "$temp_file" "$virtual_domains_file"
+        postmap "$virtual_domains_file"
+    fi
+    
+    # Update main Postfix configuration
+    update_postfix_for_multiple_domains
+    
+    echo "Domain $domain removed successfully from all configurations."
+    return 0
+}
+
+# Function to update Postfix for multiple domains
+update_postfix_for_multiple_domains() {
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local domains=$(tr '\n' ' ' < "$domain_file" | sed 's/ $//')
+    
+    # Create backup of main.cf
+    cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
+    
+    # Update virtual_alias_domains
+    if grep -q "^virtual_alias_domains" /etc/postfix/main.cf; then
+        sed -i "s/^virtual_alias_domains = .*/virtual_alias_domains = hash:\/etc\/postfix\/virtual_domains/" /etc/postfix/main.cf
+    else
+        echo "virtual_alias_domains = hash:/etc/postfix/virtual_domains" >> /etc/postfix/main.cf
+    fi
+    
+    # Update mydestination (keep local domains only)
+    if grep -q "^mydestination" /etc/postfix/main.cf; then
+        sed -i "s/^mydestination = .*/mydestination = \$myhostname, localhost.\$mydomain, localhost/" /etc/postfix/main.cf
+    else
+        echo "mydestination = \$myhostname, localhost.\$mydomain, localhost" >> /etc/postfix/main.cf
+    fi
+    
+    # Update HELO restrictions
+    if ! grep -q "check_helo_access" /etc/postfix/main.cf; then
+        sed -i '/smtpd_helo_restrictions =/ {/check_helo_access/! s/\(.*\)/\1, check_helo_access hash:\/etc\/postfix\/helo_access/}' /etc/postfix/main.cf
+    fi
+    
+    # Reload Postfix
+    if ! postfix reload; then
+        echo "Warning: Postfix reload failed, restoring backup..."
+        mv /etc/postfix/main.cf.bak /etc/postfix/main.cf
+        postfix reload
+        return 1
+    fi
+    
+    return 0
+}
+
 clear
 # Main script starts here
 echo "=== Roundcube and Postfix Installation ==="
@@ -1536,6 +1762,8 @@ echo "4. Uninstall Roundcube"
 echo "5. Uninstall MailX"
 echo "6. Change Domain"
 echo "7. Change SMTP port"
+echo "8. Add Email Domain"
+echo "9. Remove Email Domain"
 
 read -p "Enter your choice (1, 2, 3, 4, 5, 6 or 7): " choice
 
@@ -1654,6 +1882,16 @@ install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
     7)
         # Set custom SMTP port for Postfix
         set_postfix_custom_port
+        ;;
+
+    8)
+        read -p "Enter domain to add (e.g., example.com): " new_domain
+        add_domain "$new_domain"
+        ;;
+        
+    9)
+        read -p "Enter domain to remove (e.g., example.com): " domain_to_remove
+        remove_domain "$domain_to_remove"
         ;;
 
     *)
