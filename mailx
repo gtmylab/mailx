@@ -1005,7 +1005,7 @@ systemctl restart apache2 postfix dovecot
 }
 
 # Function to add a new Roundcube user
-add_roundcube_userOLD() {
+add_roundcube_user() {
     local username=$1
     local password=$2
     local quota_size=$3
@@ -1065,76 +1065,6 @@ add_roundcube_userOLD() {
     echo "User successfully configured:"
     echo "Email: $email"
     echo "Username: $username"
-    echo "Quota: ${quota_size}M"
-    echo "==============================================="
-}
-
-
-add_roundcube_user() {
-    local username=$1
-    local password=$2
-    local quota_size=$3
-    local domain=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
-    local email="$username@$domain"
-    
-    # Database credentials
-    local ROUNDCUBE_DB_PASSWORD=$(retrieve_file_data /usr/local/roundcube_db_pwd.txt)
-    local ROUNDCUBE_DB_USER="roundcube"
-    local ROUNDCUBE_DB_NAME="roundcubemail"
-    
-    # 1. VIRTUAL USER CREATION (Recommended Approach)
-    local vmail_dir="/var/vmail"
-    local maildir_path="$vmail_dir/$domain/$username"
-    
-    # Create mail directory
-    mkdir -p "$maildir_path"/{cur,new,tmp}
-    chown -R vmail:vmail "$vmail_dir"
-    
-    # 2. POSTFIX CONFIGURATION
-    # Add to virtual maps
-    echo "$email $username@$domain" >> /etc/postfix/virtual
-    postmap /etc/postfix/virtual
-    
-    # 3. DOVECOT CONFIGURATION
-    # Password file (if using passwd-file)
-    local dovecot_passwd_file="/etc/dovecot/users/$domain.passwd"
-    mkdir -p "$(dirname "$dovecot_passwd_file")"
-    
-    # Generate hashed password
-    local hashed_pw=$(doveadm pw -s SHA512-CRYPT -p "$password")
-    
-    echo "$email:$hashed_pw::::::" >> "$dovecot_passwd_file"
-    
-    # 4. ROUNDCUBE CONFIGURATION
-    # Using full email as username
-    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
-    
-    # Insert user with email as username
-    USER_ID=$(mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -se "
-    INSERT INTO users (username, mail_host, created, last_login, language, preferences) 
-    VALUES ('$email', '$domain', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE');
-    SELECT LAST_INSERT_ID();
-    ")
-    
-    # Add identity
-    mysql -u"$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME" -e "
-    INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) 
-    VALUES ('$USER_ID', NOW(), '0', '1', '$username', '$domain', '$email', '$email', '', '1');
-    "
-    
-    # 5. QUOTA CONFIGURATION
-    echo "$email:$domain:$username::${quota_size}M" >> /etc/dovecot/quotas
-    
-    # 6. RESTART SERVICES
-    systemctl restart postfix dovecot
-    
-    # 7. SEND WELCOME EMAIL
-    send_welcome_email "$email" "$username"
-    
-    echo "==============================================="
-    echo "User successfully configured:"
-    echo "Email: $email"
-    echo "Maildir: $maildir_path"
     echo "Quota: ${quota_size}M"
     echo "==============================================="
 }
