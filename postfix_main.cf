@@ -63,7 +63,7 @@ maximal_queue_lifetime = 6h
 qmgr_message_active_limit = 100000
 
 # Caching
-smtp_connection_cache_on_demand = yes
+#smtp_connection_cache_on_demand = yes
 smtp_connection_cache_time_limit = 2s
 
 # Bulk email settings
