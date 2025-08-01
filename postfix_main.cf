@@ -52,7 +52,7 @@ smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, rej
 # Performance
 
 # Connection limits
-smtpd_client_connection_limit = 100
+#smtpd_client_connection_limit = 100
 
 #maximal_queue_lifetime = 1d
 bounce_queue_lifetime = 1d
