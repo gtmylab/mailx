@@ -855,7 +855,7 @@ cleanup_state() {
     fi
 }
 
-# Fixed DKIM Generation with proper key extraction and formatting
+# Fixed generate_dkim with proper error handling
 generate_dkim() {
     DOMAIN=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     SELECTOR="default"
@@ -870,69 +870,98 @@ generate_dkim() {
         apt_install opendkim opendkim-tools
     fi
     
+    # Ensure opendkim user exists
+    if ! id opendkim &>/dev/null; then
+        useradd -r -s /usr/sbin/nologin opendkim
+    fi
+    
     # Create necessary directories
     sudo mkdir -p "$KEY_DIR"
     
-    # Check if key already exists
+    # Check if key already exists and is valid
     if [ -f "$KEY_FILE" ]; then
         log_info "DKIM key already exists for domain $DOMAIN"
         
+        # Verify key file permissions
+        sudo chown opendkim:opendkim "$KEY_FILE" 2>/dev/null || true
+        sudo chmod 600 "$KEY_FILE" 2>/dev/null || true
+        
         # Try to extract existing TXT record
         if [ -f "$TXT_RECORD_FILE" ]; then
-            DKIM_TXT_RECORD=$(cat "$TXT_RECORD_FILE" | grep -oP '(?<=v=DKIM1;).*' | sed 's/[";]//g' || echo "")
-        else
-            # Try to generate TXT record from existing key
-            DKIM_TXT_RECORD=$(sudo opendkim-testkey -d "$DOMAIN" -s "$SELECTOR" -vvv 2>&1 | grep -oP 'DNS record contains.*' | sed 's/DNS record contains //' || echo "")
+            DKIM_TXT_RECORD=$(cat "$TXT_RECORD_FILE" | grep -oP '(?<=v=DKIM1;).*' | sed 's/"//g' | sed 's/;//g' || echo "")
+            if [ -n "$DKIM_TXT_RECORD" ]; then
+                echo "$DKIM_TXT_RECORD" > /tmp/dkim_txt_record.txt
+                log_info "Existing DKIM TXT record: $SELECTOR._domainkey.$DOMAIN"
+            fi
         fi
         
-        if [ -n "$DKIM_TXT_RECORD" ]; then
-            log_info "DKIM TXT record: $SELECTOR._domainkey.$DOMAIN IN TXT \"v=DKIM1; $DKIM_TXT_RECORD\""
-            echo "$DKIM_TXT_RECORD" > /tmp/dkim_txt_record.txt
-        fi
+        # Configure OpenDKIM (even if key exists)
+        configure_opendkim "$DOMAIN" "$SELECTOR"
         return 0
     fi
     
     log_info "Generating DKIM key for domain $DOMAIN..."
     
-    # Generate DKIM key
-    cd "$KEY_DIR"
-    sudo opendkim-genkey -s $SELECTOR -d $DOMAIN -b 2048
+    # Generate DKIM key with proper permissions
+    cd "$KEY_DIR" || {
+        log_error "Failed to change to key directory"
+        return 1
+    }
     
-    # Fix permissions
-    sudo chown opendkim:opendkim "$KEY_FILE"
-    sudo chmod 600 "$KEY_FILE"
-    sudo chown opendkim:opendkim "$TXT_RECORD_FILE"
-    sudo chmod 644 "$TXT_RECORD_FILE"
+    # Remove any existing files
+    rm -f "$SELECTOR.private" "$SELECTOR.txt" 2>/dev/null || true
     
-    # Extract and format DKIM TXT record
-    if [ -f "$TXT_RECORD_FILE" ]; then
-        # Extract the actual TXT record value (everything after the first quote)
-        DKIM_RAW=$(cat "$TXT_RECORD_FILE" | grep -oP '(?<=v=DKIM1;).*' | sed 's/"//g' | sed 's/;//g' | tr -d '\n')
-        
-        # Create proper TXT record format
-        DKIM_TXT_RECORD="v=DKIM1; h=sha256; k=rsa; p=$DKIM_RAW"
-        
-        # Save for later use
-        echo "$DKIM_TXT_RECORD" > /tmp/dkim_txt_record.txt
-        
-        log_info "DKIM key generated successfully"
-        log_info "DKIM TXT record:"
-        log_info "$SELECTOR._domainkey.$DOMAIN IN TXT \"$DKIM_TXT_RECORD\""
-    else
-        log_error "Failed to generate DKIM TXT record"
+    # Generate the key
+    if ! sudo opendkim-genkey -s $SELECTOR -d $DOMAIN -b 2048; then
+        log_error "Failed to generate DKIM key"
+        cd - > /dev/null
         return 1
     fi
     
-    # Configure OpenDKIM
-    configure_opendkim "$DOMAIN" "$SELECTOR"
+    # Fix permissions
+    sudo chown opendkim:opendkim "$SELECTOR.private" "$SELECTOR.txt" 2>/dev/null || true
+    sudo chmod 600 "$SELECTOR.private"
+    sudo chmod 644 "$SELECTOR.txt"
+    
+    # Extract and format DKIM TXT record
+    if [ -f "$SELECTOR.txt" ]; then
+        # Extract the actual TXT record value
+        DKIM_RAW=$(cat "$SELECTOR.txt" | grep -oP '(?<=v=DKIM1;).*' | sed 's/"//g' | sed 's/;//g' | tr -d '\n')
+        
+        if [ -n "$DKIM_RAW" ]; then
+            # Create proper TXT record format
+            DKIM_TXT_RECORD="v=DKIM1; h=sha256; k=rsa; p=$DKIM_RAW"
+            
+            # Save for later use
+            echo "$DKIM_TXT_RECORD" > /tmp/dkim_txt_record.txt
+            
+            log_info "DKIM key generated successfully"
+            log_info "DKIM TXT record:"
+            log_info "$SELECTOR._domainkey.$DOMAIN IN TXT \"$DKIM_TXT_RECORD\""
+        else
+            log_error "Failed to extract DKIM TXT record"
+        fi
+    else
+        log_error "DKIM TXT record file not found"
+        cd - > /dev/null
+        return 1
+    fi
     
     cd - > /dev/null
     
-    # Restart OpenDKIM
-    sudo systemctl restart opendkim
-    sudo systemctl enable opendkim
+    # Configure OpenDKIM
+    if ! configure_opendkim "$DOMAIN" "$SELECTOR"; then
+        log_warning "OpenDKIM configuration had issues, but key was generated"
+    fi
     
-    return 0
+    # Verify key files exist
+    if [ -f "$KEY_FILE" ] && [ -f "$TXT_RECORD_FILE" ]; then
+        log_info "DKIM key files created successfully"
+        return 0
+    else
+        log_error "DKIM key files not created properly"
+        return 1
+    fi
 }
 
 configure_ssl_services() {
@@ -1237,70 +1266,355 @@ MailX Installation System
     log_info "DKIM TXT record: $dkim_host = \"$dkim_value\""
 }
 
-# Configure OpenDKIM to use the generated key
+# Complete fixed configure_opendkim function
 configure_opendkim() {
     local DOMAIN=$1
     local SELECTOR=$2
     local OPENDKIM_CONF="/etc/opendkim.conf"
-    local OPENDKIM_KEY_TABLE="/etc/opendkim/KeyTable"
-    local OPENDKIM_SIGNING_TABLE="/etc/opendkim/SigningTable"
-    local OPENDKIM_TRUSTED_HOSTS="/etc/opendkim/TrustedHosts"
+    local OPENDKIM_DIR="/etc/opendkim"
+    local SOCKET_DIR="/var/spool/postfix/opendkim"
     
-    # Backup original config
-    [ -f "$OPENDKIM_CONF" ] && cp "$OPENDKIM_CONF" "$OPENDKIM_CONF.bak"
+    log_info "Configuring OpenDKIM for domain $DOMAIN..."
     
-    # Configure OpenDKIM main config
+    # Stop OpenDKIM if running
+    systemctl stop opendkim 2>/dev/null || true
+    pkill -f opendkim 2>/dev/null || true
+    
+    # Create socket directory with correct permissions
+    mkdir -p "$SOCKET_DIR"
+    chown opendkim:postfix "$SOCKET_DIR"
+    chmod 750 "$SOCKET_DIR"
+    
+    # Create necessary directories
+    mkdir -p "$OPENDKIM_DIR/keys/$DOMAIN"
+    
+    # Fix permissions
+    chown -R opendkim:opendkim "$OPENDKIM_DIR" 2>/dev/null || true
+    chmod 750 "$OPENDKIM_DIR"
+    chmod 750 "$OPENDKIM_DIR/keys"
+    chmod 750 "$OPENDKIM_DIR/keys/$DOMAIN"
+    
+    # Create main configuration
     cat > "$OPENDKIM_CONF" <<EOF
 # OpenDKIM configuration
-Domain                  $DOMAIN
-Selector                $SELECTOR
-KeyFile                 /etc/opendkim/keys/$DOMAIN/$SELECTOR.private
-Socket                  inet:8891@localhost
-UserID                  opendkim
-UMask                   002
-Canonicalization        relaxed/simple
-Mode                    sv
-SubDomains              yes
 AutoRestart             yes
 AutoRestartRate         10/1M
 Background              yes
+Canonicalization        relaxed/simple
 DNSTimeout              5
-SignatureAlgorithm      rsa-sha256
+Mode                    sv
 OversignHeaders         From
-TrustAnchorFile         /usr/share/dns/root.key
-SendReports             yes
-SoftwareHeader          yes
+SenderHeaders           From
+SignatureAlgorithm      rsa-sha256
+Socket                  local:$SOCKET_DIR/opendkim.sock
+Syslog                  yes
+SyslogSuccess           yes
+TemporaryDirectory      /var/tmp
+UMask                   002
+UserID                  opendkim:opendkim
+
+# Domain configuration
+Domain                  $DOMAIN
+Selector                $SELECTOR
+KeyFile                 $OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private
 EOF
     
-    # Configure KeyTable
-    echo "$SELECTOR._domainkey.$DOMAIN $DOMAIN:$SELECTOR:/etc/opendkim/keys/$DOMAIN/$SELECTOR.private" > "$OPENDKIM_KEY_TABLE"
+    # Create KeyTable
+    cat > "$OPENDKIM_DIR/KeyTable" <<EOF
+$SELECTOR._domainkey.$DOMAIN $DOMAIN:$SELECTOR:$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private
+EOF
     
-    # Configure SigningTable
-    echo "*@$DOMAIN $SELECTOR._domainkey.$DOMAIN" > "$OPENDKIM_SIGNING_TABLE"
+    # Create SigningTable
+    cat > "$OPENDKIM_DIR/SigningTable" <<EOF
+*@$DOMAIN $SELECTOR._domainkey.$DOMAIN
+EOF
     
-    # Configure TrustedHosts
-    cat > "$OPENDKIM_TRUSTED_HOSTS" <<EOF
+    # Create TrustedHosts
+    cat > "$OPENDKIM_DIR/TrustedHosts" <<EOF
 127.0.0.1
-localhost
 ::1
+localhost
 $DOMAIN
 mail.$DOMAIN
 EOF
     
-    # Set permissions
-    chown -R opendkim:opendkim /etc/opendkim
-    chmod -R 750 /etc/opendkim
-    chmod 640 "$OPENDKIM_KEY_TABLE" "$OPENDKIM_SIGNING_TABLE" "$OPENDKIM_TRUSTED_HOSTS"
+    # Set proper permissions
+    chmod 644 "$OPENDKIM_CONF"
+    chmod 644 "$OPENDKIM_DIR/KeyTable"
+    chmod 644 "$OPENDKIM_DIR/SigningTable"
+    chmod 644 "$OPENDKIM_DIR/TrustedHosts"
     
-    # Configure Postfix to use OpenDKIM
-    if ! grep -q "smtpd_milters" /etc/postfix/main.cf; then
-        postconf -e "milter_default_action = accept"
-        postconf -e "milter_protocol = 2"
-        postconf -e "smtpd_milters = inet:localhost:8891"
-        postconf -e "non_smtpd_milters = inet:localhost:8891"
+    # Ensure key files have correct permissions
+    if [ -f "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private" ]; then
+        chmod 600 "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
+        chown opendkim:opendkim "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
     fi
     
-    log_info "OpenDKIM configured for domain $DOMAIN"
+    if [ -f "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.txt" ]; then
+        chmod 644 "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.txt"
+        chown opendkim:opendkim "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.txt"
+    fi
+    
+    # Remove any problematic systemd overrides
+    rm -f /etc/systemd/system/opendkim.service.d/override.conf 2>/dev/null || true
+    systemctl daemon-reload
+    
+    # Test configuration before starting
+    log_info "Testing OpenDKIM configuration..."
+    if opendkim -f -x "$OPENDKIM_CONF" -c 2>&1 | grep -q "configuration OK\|no errors"; then
+        log_info "OpenDKIM configuration is valid"
+    else
+        log_warning "OpenDKIM configuration test had warnings, but continuing..."
+    fi
+    
+    # Start OpenDKIM
+    log_info "Starting OpenDKIM service..."
+    
+    # Try to start with timeout
+    timeout 15 systemctl start opendkim 2>/dev/null
+    
+    # Check if started
+    sleep 2
+    if systemctl is-active --quiet opendkim; then
+        log_info "OpenDKIM started successfully"
+        systemctl enable opendkim 2>/dev/null
+        
+        # Verify socket
+        if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
+            log_info "OpenDKIM socket created: $SOCKET_DIR/opendkim.sock"
+            chmod 660 "$SOCKET_DIR/opendkim.sock"
+            chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+        else
+            log_warning "OpenDKIM socket not found, but service is running"
+        fi
+        
+        return 0
+    else
+        log_warning "OpenDKIM failed to start via systemd"
+        
+        # Try manual start for debugging
+        log_info "Attempting manual start to see errors..."
+        if su -s /bin/bash -c "opendkim -f -x $OPENDKIM_CONF" opendkim & then
+            local PID=$!
+            sleep 3
+            if kill -0 $PID 2>/dev/null; then
+                log_info "OpenDKIM running manually with PID $PID"
+                # Create systemd service file that works
+                cat > /etc/systemd/system/opendkim.service <<'EOF'
+[Unit]
+Description=OpenDKIM Milter
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/run/opendkim/opendkim.pid
+User=opendkim
+Group=opendkim
+ExecStart=/usr/sbin/opendkim -x /etc/opendkim.conf -P /run/opendkim/opendkim.pid
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                mkdir -p /run/opendkim
+                chown opendkim:opendkim /run/opendkim
+                systemctl daemon-reload
+                systemctl start opendkim
+                return 0
+            fi
+        fi
+        
+        log_error "OpenDKIM manual start also failed"
+        return 1
+    fi
+}
+
+# Simplified working OpenDKIM configuration
+configure_opendkim_simple() {
+    local DOMAIN=$1
+    local SELECTOR="default"
+    
+    log_info "Configuring OpenDKIM for $DOMAIN..."
+    
+    # Ensure directories exist with correct permissions
+    mkdir -p /var/run/opendkim
+    mkdir -p /var/spool/postfix/opendkim
+    
+    # Create opendkim user if needed
+    if ! id opendkim &>/dev/null; then
+        groupadd -r opendkim
+        useradd -r -g opendkim -s /usr/sbin/nologin opendkim
+    fi
+    
+    # Fix permissions for runtime directories
+    chown opendkim:opendkim /var/run/opendkim
+    chmod 755 /var/run/opendkim
+    chown opendkim:postfix /var/spool/postfix/opendkim
+    chmod 750 /var/spool/postfix/opendkim
+    
+    # Create a very simple configuration
+    cat > /etc/opendkim.conf <<EOF
+# Basic configuration
+AutoRestart             no
+Background              no
+Canonicalization        relaxed/simple
+Domain                  $DOMAIN
+KeyFile                 /etc/opendkim/keys/$DOMAIN/$SELECTOR.private
+Mode                    s
+PidFile                 /var/run/opendkim/opendkim.pid
+Selector                $SELECTOR
+Socket                  local:/var/spool/postfix/opendkim/opendkim.sock
+Syslog                  yes
+SyslogSuccess           yes
+UMask                   002
+UserID                  opendkim:opendkim
+EOF
+    
+    # Create SigningTable (needed for multiple domains, but keep simple)
+    cat > /etc/opendkim/SigningTable <<EOF
+*@$DOMAIN $SELECTOR._domainkey.$DOMAIN
+EOF
+    
+    # Create KeyTable
+    cat > /etc/opendkim/KeyTable <<EOF
+$SELECTOR._domainkey.$DOMAIN $DOMAIN:$SELECTOR:/etc/opendkim/keys/$DOMAIN/$SELECTOR.private
+EOF
+    
+    # Set permissions
+    chmod 644 /etc/opendkim.conf
+    chmod 644 /etc/opendkim/SigningTable
+    chmod 644 /etc/opendkim/KeyTable
+    
+    # Create systemd service that works
+    cat > /etc/systemd/system/opendkim.service <<'EOF'
+[Unit]
+Description=OpenDKIM Milter
+After=network.target
+
+[Service]
+Type=simple
+User=opendkim
+Group=opendkim
+ExecStart=/usr/sbin/opendkim -x /etc/opendkim.conf -f
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Reload systemd
+    systemctl daemon-reload
+    
+    # Kill any existing opendkim processes
+    pkill -f opendkim 2>/dev/null || true
+    rm -f /var/spool/postfix/opendkim/opendkim.sock 2>/dev/null || true
+    
+    # Start OpenDKIM
+    log_info "Starting OpenDKIM..."
+    systemctl start opendkim
+    
+    # Wait a moment
+    sleep 3
+    
+    # Check if it's running
+    if systemctl is-active --quiet opendkim; then
+        log_info "OpenDKIM started successfully"
+        
+        # Check socket
+        if [ -S "/var/spool/postfix/opendkim/opendkim.sock" ]; then
+            log_info "Socket created: /var/spool/postfix/opendkim/opendkim.sock"
+            ls -la /var/spool/postfix/opendkim/opendkim.sock
+        else
+            log_warning "Socket not created, checking logs..."
+            journalctl -u opendkim -n 10 --no-pager
+        fi
+        
+        # Enable service
+        systemctl enable opendkim
+        
+        # Configure Postfix
+        log_info "Configuring Postfix for DKIM..."
+        postconf -e "milter_default_action = accept"
+        postconf -e "milter_protocol = 2"
+        postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
+        postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
+        
+        # Restart Postfix
+        systemctl restart postfix
+        
+        # Test DKIM (this may fail if DNS isn't set up yet)
+        log_info "Testing DKIM key (may fail if DNS not configured)..."
+        opendkim-testkey -d "$DOMAIN" -s "$SELECTOR" 2>&1 | head -2
+        
+        return 0
+    else
+        log_error "OpenDKIM failed to start. Checking logs..."
+        journalctl -u opendkim -n 20 --no-pager
+        
+        # Try manual start to see error
+        log_info "Attempting manual start to see error..."
+        sudo -u opendkim /usr/sbin/opendkim -x /etc/opendkim.conf -f -v &
+        sleep 3
+        pgrep -f opendkim
+        
+        return 1
+    fi
+}
+
+# Update the DKIM generation to use the simple config
+generate_dkim_simple() {
+    local DOMAIN=$1
+    local SELECTOR="default"
+    local DKIM_DIR="/etc/opendkim/keys/$DOMAIN"
+    local KEY_FILE="$DKIM_DIR/$SELECTOR.private"
+    
+    # Check if key already exists
+    if [ -f "$KEY_FILE" ]; then
+        log_info "DKIM key already exists for domain $DOMAIN"
+        
+        # Extract DKIM record for email
+        if [ -f "$DKIM_DIR/$SELECTOR.txt" ]; then
+            DKIM_RECORD=$(cat "$DKIM_DIR/$SELECTOR.txt" | grep -o 'v=DKIM1;.*' | sed 's/"//g')
+            echo "$DKIM_RECORD" > /tmp/dkim_txt_record.txt
+            log_info "DKIM TXT record: $SELECTOR._domainkey.$DOMAIN = \"$DKIM_RECORD\""
+        fi
+        
+        return 0
+    fi
+    
+    log_info "Generating DKIM key for domain $DOMAIN..."
+    
+    # Create directory
+    mkdir -p "$DKIM_DIR"
+    cd "$DKIM_DIR"
+    
+    # Generate key
+    if ! opendkim-genkey -s "$SELECTOR" -d "$DOMAIN" -b 2048; then
+        log_error "Failed to generate DKIM key"
+        return 1
+    fi
+    
+    # Set permissions
+    chown -R opendkim:opendkim "$DKIM_DIR"
+    chmod 750 "$DKIM_DIR"
+    chmod 600 "$SELECTOR.private"
+    chmod 644 "$SELECTOR.txt"
+    
+    # Extract DKIM record
+    DKIM_RECORD=$(cat "$SELECTOR.txt" | grep -o 'v=DKIM1;.*' | sed 's/"//g')
+    echo "$DKIM_RECORD" > /tmp/dkim_txt_record.txt
+    
+    log_info "DKIM key generated successfully"
+    log_info "DKIM TXT record: $SELECTOR._domainkey.$DOMAIN = \"$DKIM_RECORD\""
+    
+    cd - > /dev/null
+    return 0
 }
 
 send_test_message() {
@@ -1819,27 +2133,49 @@ verify_roundcube_installation() {
 }
 
 
+# Enhanced verify_dkim function
 verify_dkim() {
     local DOMAIN=$(retrieve_file_data /usr/local/roundcube_mail_domain.txt)
     local SELECTOR="default"
     
     log_info "Verifying DKIM configuration..."
     
-    # Check if OpenDKIM is running
-    if ! systemctl is-active --quiet opendkim; then
-        log_warning "OpenDKIM is not running, attempting to start..."
-        systemctl start opendkim
-        sleep 2
-    fi
+    # Wait a moment for service to stabilize
+    sleep 2
     
-    # Test DKIM key
-    if opendkim-testkey -d "$DOMAIN" -s "$SELECTOR" -vvv 2>&1 | grep -q "key OK"; then
-        log_info "DKIM key verification successful"
-        return 0
+    # Check if OpenDKIM is running
+    if systemctl is-active --quiet opendkim; then
+        log_info "OpenDKIM is running"
+        
+        # Test the key
+        if opendkim-testkey -d "$DOMAIN" -s "$SELECTOR" 2>&1 | grep -q "key OK"; then
+            log_info "DKIM key verification successful"
+            return 0
+        else
+            log_warning "DKIM key verification failed. DNS may not have propagated yet."
+            log_info "Test with: opendkim-testkey -d $DOMAIN -s $SELECTOR -vvv"
+            return 1
+        fi
     else
-        log_warning "DKIM key verification failed. DNS may not have propagated yet."
-        log_info "Run: opendkim-testkey -d $DOMAIN -s $SELECTOR -vvv to debug"
-        return 1
+        log_warning "OpenDKIM is not running"
+        
+        # Check service status
+        if systemctl status opendkim --no-pager -l; then
+            log_info "Service status displayed above"
+        fi
+        
+        log_info "Attempting to start OpenDKIM manually..."
+        
+        # Try to start with specific config
+        if opendkim -f -x /etc/opendkim.conf; then
+            log_info "OpenDKIM started manually"
+            systemctl start opendkim 2>/dev/null || true
+            return 0
+        else
+            log_error "OpenDKIM cannot start. Check configuration:"
+            log_error "opendkim -f -x /etc/opendkim.conf"
+            return 1
+        fi
     fi
 }
 
@@ -2102,25 +2438,33 @@ EOF
         mark_stage_complete "postfix_configuration"
     fi
     
-    # Stage 11: DKIM Generation and Verification
-    if ! is_stage_completed "dkim_generation"; then
-        log_info "=== Stage 11: DKIM Generation ==="
+# Stage 11: DKIM Generation (Simplified)
+if ! is_stage_completed "dkim_generation"; then
+    log_info "=== Stage 11: DKIM Generation ==="
+    
+    # Install OpenDKIM if needed
+    if ! command -v opendkim-genkey &> /dev/null; then
+        log_info "Installing OpenDKIM..."
+        apt_install opendkim opendkim-tools
+    fi
+    
+    # Generate DKIM key
+    if generate_dkim_simple "$EMAIL_DOMAIN"; then
+        log_info "DKIM key generated/verified"
         
-        if ! command -v opendkim-genkey &> /dev/null; then
-            apt_install opendkim opendkim-tools
-        fi
-        
-        if generate_dkim; then
-            log_info "DKIM generated successfully"
-            
-            # Verify DKIM configuration
-            verify_dkim
-            
+        # Configure OpenDKIM
+        if configure_opendkim_simple "$EMAIL_DOMAIN"; then
+            log_info "OpenDKIM configured and started"
             mark_stage_complete "dkim_generation"
         else
-            log_warning "DKIM generation had issues, but continuing..."
+            log_warning "OpenDKIM service configuration had issues"
+            # Mark as complete anyway since key exists
+            mark_stage_complete "dkim_generation"
         fi
+    else
+        log_warning "DKIM generation failed"
     fi
+fi
     
     # Stage 12: Additional Files
     if ! is_stage_completed "additional_files"; then
