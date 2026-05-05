@@ -2336,6 +2336,34 @@ VERIFICATION:
     fi
 }
 
+
+# Network diagnostics and fix
+fix_network_for_ppa() {
+    log_info "Checking network connectivity to PPA..."
+    
+    # Test connectivity
+    if ! curl -s --connect-timeout 5 https://ppa.launchpadcontent.net > /dev/null; then
+        log_warning "Cannot reach PPA server, checking DNS..."
+        
+        # Try different DNS servers
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+        
+        # Flush DNS cache
+        systemd-resolve --flush-caches 2>/dev/null || true
+        
+        # Retry connection
+        sleep 2
+        if ! curl -s --connect-timeout 5 https://ppa.launchpadcontent.net > /dev/null; then
+            log_warning "Still cannot reach PPA. Will proceed with fallback..."
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+
 # ============================================================================
 # Main Installation Function with Checkpoints
 # ============================================================================
@@ -2394,6 +2422,7 @@ EOF
     # Stage 3: PHP and Basic Packages
     if ! is_stage_completed "php_installation"; then
         log_info "=== Stage 3: PHP and Basic Packages Installation ==="
+        fix_network_for_ppa
 
         apt_install software-properties-common
 
