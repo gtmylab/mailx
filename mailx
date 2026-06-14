@@ -797,9 +797,12 @@ configure_opendkim() {
     mkdir -p "$SOCKET_DIR"
     mkdir -p /var/run/opendkim
     chown opendkim:postfix "$SOCKET_DIR"
-    chmod 750 "$SOCKET_DIR"
+    chmod 775 "$SOCKET_DIR"
     chown opendkim:opendkim /var/run/opendkim
     chmod 755 /var/run/opendkim
+
+    # Set SGID bit on socket dir so new socket files inherit the postfix group
+    chmod g+s "$SOCKET_DIR"
 
     # Remove stale socket
     rm -f "$SOCKET_DIR/opendkim.sock" 2>/dev/null || true
@@ -835,7 +838,7 @@ Mode                    sv
 SubDomains              no
 OversignHeaders         From
 SignatureAlgorithm      rsa-sha256
-UMask                   002
+UMask                   007
 
 # User and group
 UserID                  opendkim:opendkim
@@ -918,7 +921,14 @@ EOF
             chmod 660 "$SOCKET_DIR/opendkim.sock"
             chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
         else
-            log_warning "OpenDKIM socket not found, but service is running"
+            # Socket may not have been created yet; try restarting with proper permissions
+            log_warning "OpenDKIM socket not found, restarting service..."
+            systemctl restart opendkim
+            sleep 2
+            if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
+                chmod 660 "$SOCKET_DIR/opendkim.sock"
+                chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+            fi
         fi
 
         # Enable service to start on boot
@@ -926,7 +936,7 @@ EOF
 
         # Configure Postfix to use DKIM milter
         log_info "Configuring Postfix for DKIM signing..."
-        postconf -e "milter_default_action = tempfail"
+        postconf -e "milter_default_action = accept"
         postconf -e "milter_protocol = 2"
         postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
         postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
@@ -1902,7 +1912,7 @@ repair_postfix_config() {
     setup_postfix_header_checks "$host"
 
     # Re-apply DKIM milter settings (always apply, so fresh config download doesn't wipe them)
-    postconf -e "milter_default_action = tempfail"
+    postconf -e "milter_default_action = accept"
     postconf -e "milter_protocol = 2"
     postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
     postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
