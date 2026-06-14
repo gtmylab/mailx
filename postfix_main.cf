@@ -67,7 +67,7 @@ qmgr_message_active_limit = 100000
 smtp_connection_cache_time_limit = 2s
 
 # Milter (DKIM) settings
-milter_default_action = tempfail
+milter_default_action = accept
 milter_protocol = 2
 smtpd_milters = unix:opendkim/opendkim.sock
 non_smtpd_milters = unix:opendkim/opendkim.sock
