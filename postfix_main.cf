@@ -66,6 +66,12 @@ qmgr_message_active_limit = 100000
 #smtp_connection_cache_on_demand = yes
 smtp_connection_cache_time_limit = 2s
 
+# Milter (DKIM) settings
+milter_default_action = tempfail
+milter_protocol = 2
+smtpd_milters = unix:opendkim/opendkim.sock
+non_smtpd_milters = unix:opendkim/opendkim.sock
+
 # Bulk email settings
 default_process_limit = 100
 smtp_connection_cache_on_demand = no
