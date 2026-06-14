@@ -926,7 +926,7 @@ EOF
 
         # Configure Postfix to use DKIM milter
         log_info "Configuring Postfix for DKIM signing..."
-        postconf -e "milter_default_action = accept"
+        postconf -e "milter_default_action = tempfail"
         postconf -e "milter_protocol = 2"
         postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
         postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
@@ -1901,14 +1901,12 @@ repair_postfix_config() {
     # Re-apply header checks
     setup_postfix_header_checks "$host"
 
-    # Re-apply DKIM milter settings if OpenDKIM is configured
-    if [ -S "/var/spool/postfix/opendkim/opendkim.sock" ] || systemctl is-active --quiet opendkim 2>/dev/null; then
-        postconf -e "milter_default_action = accept"
-        postconf -e "milter_protocol = 2"
-        postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
-        postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
-        log_info "DKIM milter settings re-applied"
-    fi
+    # Re-apply DKIM milter settings (always apply, so fresh config download doesn't wipe them)
+    postconf -e "milter_default_action = tempfail"
+    postconf -e "milter_protocol = 2"
+    postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
+    postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
+    log_info "DKIM milter settings re-applied"
 
     # Re-apply SSL cert paths if they exist
     local cert_path="/etc/letsencrypt/live/$domain"
@@ -2677,8 +2675,9 @@ EOF
 
     # Final: Restart Services
     log_info "=== Final: Restarting Services ==="
-    systemctl restart apache2 postfix dovecot 2>/dev/null || true
     systemctl restart opendkim 2>/dev/null || true
+    sleep 2
+    systemctl restart apache2 dovecot postfix 2>/dev/null || true
 
     # Send notification email with all details
     if ! is_stage_completed "notification_sent"; then
