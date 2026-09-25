@@ -221,7 +221,7 @@ EOT
 }
 
 configure_dovecot_sasl() {
-    if [ -f "/etc/dovecot/conf.d/10-master.conf" ] && [ -S "/var/spool/postfix/private/auth" ]; then
+    if [ -f "/etc/dovecot/conf.d/10-master.conf" ] && [ -S "/var/spool//private/auth" ]; then
         log_info "Dovecot SASL already configured, skipping..."
         return 0
     fi
@@ -239,20 +239,20 @@ configure_dovecot_sasl() {
     fi
 
     # Create auth directory structure
-    mkdir -p /var/spool/postfix/private
-    chown -R postfix:postfix /var/spool/postfix/private
-    chmod -R 0750 /var/spool/postfix/private
+    mkdir -p /var/spool//private
+    chown -R : /var/spool//private
+    chmod -R 0750 /var/spool//private
 
     # Remove any existing auth socket/directory
-    [ -e /var/spool/postfix/private/auth ] && rm -rf /var/spool/postfix/private/auth
+    [ -e /var/spool//private/auth ] && rm -rf /var/spool//private/auth
 
     # Configure 10-master.conf
     cat <<EOF > /etc/dovecot/conf.d/10-master.conf
 service auth {
-  unix_listener /var/spool/postfix/private/auth {
+  unix_listener /var/spool//private/auth {
     mode = 0660
-    user = postfix
-    group = postfix
+    user = 
+    group = 
   }
 }
 
@@ -279,8 +279,8 @@ service pop3-login {
 service lmtp {
   unix_listener lmtp {
     mode = 0660
-    user = postfix
-    group = postfix
+    user = 
+    group = 
   }
 }
 
@@ -335,23 +335,23 @@ EOF
     }
 
     # Verify socket creation
-    if [ -S /var/spool/postfix/private/auth ]; then
+    if [ -S /var/spool//private/auth ]; then
         log_info "Dovecot SASL configured successfully"
     else
         log_warning "SASL socket not created immediately, may need manual check"
     fi
 
-    # Restart Postfix
-    systemctl restart postfix 2>/dev/null || true
+    # Restart 
+    systemctl restart  2>/dev/null || true
 }
 
-verify_postfix_dovecot_connection() {
-    log_info "Verifying Postfix-Dovecot SASL connection..."
-    if ls /var/spool/postfix/private/auth >/dev/null 2>&1; then
-        log_info "Postfix can access Dovecot auth socket - configuration OK"
+verify__dovecot_connection() {
+    log_info "Verifying -Dovecot SASL connection..."
+    if ls /var/spool//private/auth >/dev/null 2>&1; then
+        log_info " can access Dovecot auth socket - configuration OK"
         return 0
     else
-        log_warning "Postfix cannot access Dovecot auth socket"
+        log_warning " cannot access Dovecot auth socket"
         return 1
     fi
 }
@@ -367,19 +367,19 @@ test_sasl_authentication() {
         log_warning "SASL LOGIN authentication NOT available"
 }
 
-update_postfix_config() {
+update__config() {
     local domain="$1"
     local hostname="$2"
-    local config_dir="/etc/postfix"
+    local config_dir="/etc/"
     local backup_dir="${config_dir}/backups"
     local timestamp=$(date +%Y%m%d_%H%M%S)
 
     if [ -f "$config_dir/main.cf" ] && grep -q "$domain" "$config_dir/main.cf" 2>/dev/null; then
-        log_info "Postfix already configured for domain $domain, skipping..."
+        log_info " already configured for domain $domain, skipping..."
         return 0
     fi
 
-    log_info "Updating Postfix configuration for domain: $domain, hostname: $hostname"
+    log_info "Updating  configuration for domain: $domain, hostname: $hostname"
 
     # Create backup directory
     mkdir -p "$backup_dir"
@@ -393,8 +393,8 @@ update_postfix_config() {
 
     # Download configuration files
     declare -A config_urls=(
-        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"
-        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"
+        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"
+        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"
     )
 
     for file in "${!config_urls[@]}"; do
@@ -435,29 +435,29 @@ update_postfix_config() {
     fi
 
     # Validate configuration
-    if postfix check 2>/dev/null; then
-        log_info "Postfix configuration validated"
+    if  check 2>/dev/null; then
+        log_info " configuration validated"
     else
-        log_warning "Postfix configuration check had warnings"
+        log_warning " configuration check had warnings"
     fi
 
-    # Restart Postfix
-    restart_service postfix
+    # Restart 
+    restart_service 
     return 0
 }
 
-update_postfix_virtual() {
+update__virtual() {
     local domain=$1
     local username=$2
 
-    if ! check_string_in_file "/etc/postfix/virtual" "$username@$domain"; then
-        echo "$username@$domain $username" >> /etc/postfix/virtual
-        postmap /etc/postfix/virtual 2>/dev/null
-        log_info "Updated /etc/postfix/virtual with $username@$domain"
+    if ! check_string_in_file "/etc//virtual" "$username@$domain"; then
+        echo "$username@$domain $username" >> /etc//virtual
+        postmap /etc//virtual 2>/dev/null
+        log_info "Updated /etc//virtual with $username@$domain"
     fi
 }
 
-update_postfix_maincf() {
+update__maincf() {
     local domain=$1
 
     # Use postconf -e for safe, idempotent updates (won't create duplicates)
@@ -468,26 +468,26 @@ update_postfix_maincf() {
     postconf -e "myorigin = \$mydomain"
     postconf -e "mydestination = \$myhostname, localhost.\$mydomain, localhost, \$mydomain"
 
-    log_info "Postfix main.cf domain settings updated for $domain"
+    log_info " main.cf domain settings updated for $domain"
 }
 
-setup_postfix_header_checks() {
+setup__header_checks() {
     local hostname=$1
 
-    log_info "Configuring Postfix header checks..."
+    log_info "Configuring  header checks..."
 
     # Create or update the header_checks file
-    cat <<EOF > /etc/postfix/header_checks
+    cat <<EOF > /etc//header_checks
 /^Received: from \S+ \(.*\[.*\]\)/ REPLACE Received: from $hostname (localhost [127.0.0.1])
 /^X-Originating-IP:/ IGNORE
 EOF
 
-    chmod 644 /etc/postfix/header_checks
+    chmod 644 /etc//header_checks
 
     # Use postconf -e to safely set (won't duplicate if already in downloaded config)
-    postconf -e "header_checks = regexp:/etc/postfix/header_checks"
+    postconf -e "header_checks = regexp:/etc//header_checks"
 
-    log_info "Postfix header checks configured successfully."
+    log_info " header checks configured successfully."
 }
 
 # ============================================================================
@@ -778,13 +778,13 @@ generate_dkim_key() {
     return 0
 }
 
-# Configure OpenDKIM daemon and integrate with Postfix
+# Configure OpenDKIM daemon and integrate with 
 configure_opendkim() {
     local DOMAIN=$1
     local SELECTOR="default"
     local OPENDKIM_CONF="/etc/opendkim.conf"
     local OPENDKIM_DIR="/etc/opendkim"
-    local SOCKET_DIR="/var/spool/postfix/opendkim"
+    local SOCKET_DIR="/var/spool//opendkim"
 
     log_info "Configuring OpenDKIM for domain $DOMAIN..."
 
@@ -796,12 +796,12 @@ configure_opendkim() {
     # Create socket and runtime directories with correct permissions
     mkdir -p "$SOCKET_DIR"
     mkdir -p /var/run/opendkim
-    chown opendkim:postfix "$SOCKET_DIR"
+    chown opendkim: "$SOCKET_DIR"
     chmod 775 "$SOCKET_DIR"
     chown opendkim:opendkim /var/run/opendkim
     chmod 755 /var/run/opendkim
 
-    # Set SGID bit on socket dir so new socket files inherit the postfix group
+    # Set SGID bit on socket dir so new socket files inherit the  group
     chmod g+s "$SOCKET_DIR"
 
     # Remove stale socket
@@ -919,7 +919,7 @@ EOF
         if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
             log_info "OpenDKIM socket created: $SOCKET_DIR/opendkim.sock"
             chmod 660 "$SOCKET_DIR/opendkim.sock"
-            chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+            chown opendkim: "$SOCKET_DIR/opendkim.sock"
         else
             # Socket may not have been created yet; try restarting with proper permissions
             log_warning "OpenDKIM socket not found, restarting service..."
@@ -927,24 +927,24 @@ EOF
             sleep 2
             if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
                 chmod 660 "$SOCKET_DIR/opendkim.sock"
-                chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+                chown opendkim: "$SOCKET_DIR/opendkim.sock"
             fi
         fi
 
         # Enable service to start on boot
         systemctl enable opendkim 2>/dev/null || true
 
-        # Configure Postfix to use DKIM milter
-        log_info "Configuring Postfix for DKIM signing..."
+        # Configure  to use DKIM milter
+        log_info "Configuring  for DKIM signing..."
         postconf -e "milter_default_action = accept"
         postconf -e "milter_protocol = 2"
         postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
         postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
 
-        # Restart Postfix to apply changes
-        systemctl restart postfix
+        # Restart  to apply changes
+        systemctl restart 
 
-        log_info "Postfix configured for DKIM signing"
+        log_info " configured for DKIM signing"
         return 0
     else
         log_error "OpenDKIM failed to start"
@@ -968,9 +968,9 @@ verify_dkim() {
     log_info "OpenDKIM service is running"
 
     # Check socket
-    if [ -S "/var/spool/postfix/opendkim/opendkim.sock" ]; then
+    if [ -S "/var/spool//opendkim/opendkim.sock" ]; then
         local SOCKET_PERMS
-        SOCKET_PERMS=$(stat -c "%a %U:%G" /var/spool/postfix/opendkim/opendkim.sock 2>/dev/null || echo "unknown")
+        SOCKET_PERMS=$(stat -c "%a %U:%G" /var/spool//opendkim/opendkim.sock 2>/dev/null || echo "unknown")
         log_info "Socket permissions: $SOCKET_PERMS"
     else
         log_warning "OpenDKIM socket not found"
@@ -1015,7 +1015,7 @@ configure_ssl_services() {
         sed -i "s|SSLCertificateKeyFile.*|SSLCertificateKeyFile $cert_path/privkey.pem|" /etc/apache2/sites-available/adminportal.conf 2>/dev/null || true
     fi
 
-    # Postfix configuration
+    #  configuration
     postconf -e "smtpd_tls_cert_file=$cert_path/fullchain.pem" 2>/dev/null || true
     postconf -e "smtpd_tls_key_file=$cert_path/privkey.pem" 2>/dev/null || true
 
@@ -1036,13 +1036,560 @@ setup_ssl_renewal() {
 
     cat << 'EOF' > /usr/local/bin/ssl_renewal.sh
 #!/bin/bash
-certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"
+certbot renew --quiet --post-hook "systemctl reload  dovecot apache2"
 EOF
 
     chmod +x /usr/local/bin/ssl_renewal.sh
     (crontab -l 2>/dev/null | grep -v "ssl_renewal.sh"; echo "0 3 * * * /usr/local/bin/ssl_renewal.sh") | crontab - 2>/dev/null || true
 
     log_info "Automatic SSL renewal configured."
+}
+
+
+# ============================================================================
+# SSL Certificate Management — View, Renew, Notify
+# ============================================================================
+
+# Resolve the cert name / domains covered by the primary cert
+get_ssl_domain() {
+    local domain
+    domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$domain" ]; then
+        # Fallback: first certbot cert
+        domain=$(certbot certificates 2>/dev/null \
+            | awk -F': ' '/Certificate Name/ {print $2; exit}' \
+            | tr -d '[:space:]')
+    fi
+    echo "$domain"
+}
+
+# ---------------------------------------------------------------------------
+# 15. Show comprehensive SSL certificate details
+# ---------------------------------------------------------------------------
+show_ssl_details() {
+    echo ""
+    echo "=============================================="
+    echo "   SSL Certificate Details"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed. SSL is not configured on this server."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    if [ -z "$primary_domain" ]; then
+        log_warning "No primary domain recorded and no certbot certs found."
+        log_info "Listing all certbot certificates:"
+        certbot certificates 2>/dev/null || echo "  (none)"
+        return 1
+    fi
+
+    local cert_path="/etc/letsencrypt/live/$primary_domain"
+    if [ ! -d "$cert_path" ]; then
+        log_error "Certificate directory not found: $cert_path"
+        log_info "Listing available certbot certificates:"
+        certbot certificates 2>/dev/null || echo "  (none)"
+        return 1
+    fi
+
+    local fullchain="$cert_path/fullchain.pem"
+    if [ ! -f "$fullchain" ]; then
+        log_error "fullchain.pem not found at $fullchain"
+        return 1
+    fi
+
+    # ---- Basic info -------------------------------------------------------
+    local subject issuer not_before not_after serial sigalg
+    subject=$(openssl x509 -in "$fullchain" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    issuer=$(openssl x509 -in "$fullchain" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
+    not_before=$(openssl x509 -in "$fullchain" -noout -startdate 2>/dev/null | cut -d= -f2)
+    not_after=$(openssl x509 -in "$fullchain" -noout -enddate   2>/dev/null | cut -d= -f2)
+    serial=$(openssl x509 -in "$fullchain" -noout -serial 2>/dev/null | cut -d= -f2)
+    sigalg=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk -F': ' '/Signature Algorithm/ {print $2; exit}')
+
+    # ---- Expiry math ------------------------------------------------------
+    local not_after_epoch now_epoch days_left hours_left human_left
+    not_after_epoch=$(date -d "$not_after" +%s 2>/dev/null)
+    now_epoch=$(date +%s)
+    days_left=$(( (not_after_epoch - now_epoch) / 86400 ))
+    hours_left=$(( ((not_after_epoch - now_epoch) % 86400) / 3600 ))
+
+    if [ "$days_left" -lt 0 ]; then
+        human_left="EXPIRED $(( -days_left )) days ago"
+    elif [ "$days_left" -eq 0 ]; then
+        human_left="$hours_left hours"
+    else
+        human_left="$days_left days, $hours_left hours"
+    fi
+
+    # ---- SANs -------------------------------------------------------------
+    local sans
+    sans=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk '/X509v3 Subject Alternative Name/ {getline; gsub(/^[ \t]+/, ""); print; exit}')
+
+    # ---- Key info ---------------------------------------------------------
+    local key_bits key_type
+    key_bits=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk -F'[()]' '/Public-Key:/ {print $2; exit}')
+    key_type=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk '/Public Key Algorithm/ {print $3; exit}')
+
+    # ---- Chain length -----------------------------------------------------
+    local chain_count
+    chain_count=$(grep -c "BEGIN CERTIFICATE" "$fullchain" 2>/dev/null)
+
+    # ---- Display ----------------------------------------------------------
+    echo "Primary domain : $primary_domain"
+    echo "Cert directory : $cert_path"
+    echo ""
+    echo "Subject        : $subject"
+    echo "Issuer         : $issuer"
+    echo "Serial         : $serial"
+    echo "Signature alg  : $sigalg"
+    echo "Public key     : $key_type ${key_bits}"
+    echo "Chain length   : $chain_count certificate(s)"
+    echo ""
+    echo "Valid from     : $not_before"
+    echo "Valid until    : $not_after"
+    echo "Expires in     : $human_left"
+    echo ""
+    echo "SANs           :"
+    if [ -n "$sans" ]; then
+        echo "$sans" | tr ',' '\n' | sed 's/^[ \t]*/  - /'
+    else
+        echo "  (none)"
+    fi
+    echo ""
+
+    # ---- Health classification -------------------------------------------
+    if [ "$days_left" -lt 0 ]; then
+        echo -e "${RED}STATUS: EXPIRED${NC}"
+    elif [ "$days_left" -le 7 ]; then
+        echo -e "${RED}STATUS: CRITICAL — expires in $days_left day(s)${NC}"
+    elif [ "$days_left" -le 21 ]; then
+        echo -e "${YELLOW}STATUS: WARNING — expires in $days_left day(s)${NC}"
+    else
+        echo -e "${GREEN}STATUS: OK${NC}"
+    fi
+    echo ""
+
+    # ---- Renewal config for this cert ------------------------------------
+    if [ -f "/etc/letsencrypt/renewal/$primary_domain.conf" ]; then
+        echo "Renewal configuration:"
+        grep -E '^(authenticator|installer|webroot_path|archive_dir|server)\s*=' \
+            "/etc/letsencrypt/renewal/$primary_domain.conf" 2>/dev/null \
+            | sed 's/^/  /' || true
+        echo ""
+    fi
+
+    # ---- Auto-renewal timer status ---------------------------------------
+    echo "Auto-renewal mechanisms:"
+    if systemctl is-enabled certbot.timer >/dev/null 2>&1; then
+        local next_run
+        next_run=$(systemctl list-timers certbot.timer --no-pager 2>/dev/null \
+            | awk 'NR==2 {print $1" "$2" "$3}')
+        echo "  ✓ certbot.timer enabled (next: ${next_run:-unknown})"
+    else
+        echo "  ✗ certbot.timer NOT enabled"
+    fi
+
+    if crontab -l 2>/dev/null | grep -q "ssl_renewal.sh"; then
+        echo "  ✓ Cron entry for ssl_renewal.sh present"
+    else
+        echo "  ✗ No cron entry for ssl_renewal.sh"
+    fi
+
+    if [ -x "/usr/local/bin/ssl_renewal.sh" ]; then
+        echo "  ✓ /usr/local/bin/ssl_renewal.sh exists"
+    else
+        echo "  ✗ /usr/local/bin/ssl_renewal.sh missing"
+    fi
+    echo ""
+
+    # ---- All certs overview ----------------------------------------------
+    echo "All certificates on this server:"
+    certbot certificates 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+    echo ""
+}
+
+
+# ---------------------------------------------------------------------------
+# 16. Force renewal now
+# ---------------------------------------------------------------------------
+renew_ssl_now() {
+    echo ""
+    echo "=============================================="
+    echo "   Renew SSL Certificates Now"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    if [ -z "$primary_domain" ]; then
+        log_error "No domain configured. Run the installer first."
+        return 1
+    fi
+
+    echo "Primary domain : $primary_domain"
+    echo ""
+    echo "Choose renewal mode:"
+    echo "  1) Normal renew (only if < 30 days left)"
+    echo "  2) Force renew  (regardless of expiry)"
+    echo "  3) Dry run      (test only, no changes)"
+    echo "  4) Cancel"
+    echo ""
+    read -p "Choice (1-4): " mode
+
+    case "$mode" in
+        1)
+            log_info "Running normal renewal..."
+            if certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"; then
+                log_info "Renewal completed"
+            else
+                log_error "Renewal failed"
+                notify_ssl_failure "Normal renewal failed at $(date)"
+                return 1
+            fi
+            ;;
+        2)
+            log_info "Forcing renewal for $primary_domain..."
+            if certbot certonly --force-renewal \
+                -d "$primary_domain" \
+                -d "mail.$primary_domain" \
+                --non-interactive --agree-tos \
+                --email "admin@$primary_domain" \
+                --post-hook "systemctl reload postfix dovecot apache2"; then
+                log_info "Forced renewal completed"
+            else
+                log_error "Forced renewal failed"
+                notify_ssl_failure "Forced renewal failed at $(date)"
+                return 1
+            fi
+            ;;
+        3)
+            log_info "Running dry-run (no changes will be made)..."
+            if certbot renew --dry-run; then
+                log_info "Dry run succeeded — actual renewal should work"
+            else
+                log_error "Dry run failed — investigate before renewing"
+                return 1
+            fi
+            ;;
+        4)
+            log_info "Cancelled."
+            return 0
+            ;;
+        *)
+            log_error "Invalid choice"
+            return 1
+            ;;
+    esac
+
+    echo ""
+    log_info "Post-renewal certificate status:"
+    show_ssl_details
+}
+
+# ---------------------------------------------------------------------------
+# 17. Configure auto-renewal with admin notifications
+# ---------------------------------------------------------------------------
+
+# Send a failure notification (used by the renewal wrapper)
+notify_ssl_failure() {
+    local reason="$1"
+    local admin_email
+    admin_email=$(retrieve_file_data /usr/local/mailx_admin_email.txt 2>/dev/null || echo "")
+    local domain
+    domain=$(get_ssl_domain)
+    local hostname
+    hostname=$(hostname)
+
+    # Always log to file
+    local fail_log="/var/log/mailx/ssl_renewal_failures.log"
+    mkdir -p "$(dirname "$fail_log")"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $reason" >> "$fail_log"
+
+    if [ -z "$admin_email" ]; then
+        log_warning "No admin email configured for SSL notifications (saved to $fail_log)"
+        return 0
+    fi
+
+    local body="===========================================
+SSL RENEWAL FAILURE — ACTION REQUIRED
+===========================================
+
+Server    : $hostname
+Domain    : ${domain:-unknown}
+Time      : $(date '+%Y-%m-%d %H:%M:%S')
+Reason    : $reason
+
+WHAT TO DO:
+-----------
+1. SSH into the server
+2. Run: certbot renew --dry-run
+3. Check logs: tail -n 50 /var/log/letsencrypt/letsencrypt.log
+4. Common causes:
+   - Port 80 blocked (HTTP-01 challenge fails)
+   - DNS changed / domain no longer points here
+   - Rate limit hit
+   - Webroot path missing
+
+MANUAL RENEWAL:
+---------------
+certbot renew --force-renewal
+systemctl reload postfix dovecot apache2
+
+Check current cert status:
+   Run the MailX script -> option 16 (View SSL Certificate Details)
+
+Failure log: $fail_log
+==========================================="
+
+    echo -e "$body" | mail -s "[$hostname] SSL renewal FAILED for ${domain:-unknown}" \
+        -a "From: admin@${domain:-localhost}" "$admin_email" 2>/dev/null || \
+        log_warning "Failed to send SSL failure email to $admin_email"
+}
+
+configure_ssl_autorenewal() {
+    echo ""
+    echo "=============================================="
+    echo "   Configure SSL Auto-Renewal & Notifications"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed. Run the installer first."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    # ---- Admin email ------------------------------------------------------
+    local default_admin="admin@${primary_domain:-example.com}"
+    local current_admin
+    current_admin=$(cat /usr/local/mailx_admin_email.txt 2>/dev/null || echo "")
+
+    echo "Current admin email for notifications: ${current_admin:-<not set>}"
+    read -p "Enter admin email for SSL notifications [$default_admin]: " admin_email
+    admin_email="${admin_email:-$default_admin}"
+
+    if [[ ! "$admin_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+        log_error "Invalid email address: $admin_email"
+        return 1
+    fi
+
+    echo "$admin_email" > /usr/local/mailx_admin_email.txt
+    chmod 600 /usr/local/mailx_admin_email.txt
+    log_info "Admin email saved: $admin_email"
+
+    # ---- Days-before-warning threshold ------------------------------------
+    local current_days
+    current_days=$(cat /usr/local/mailx_ssl_warn_days.txt 2>/dev/null || echo "14")
+    echo ""
+    echo "Current warning threshold: $current_days days before expiry"
+    read -p "Notify when cert has fewer than N days left [14]: " warn_days
+    warn_days="${warn_days:-14}"
+
+    if ! [[ "$warn_days" =~ ^[0-9]+$ ]] || [ "$warn_days" -lt 1 ] || [ "$warn_days" -gt 89 ]; then
+        log_error "Threshold must be between 1 and 89 days"
+        return 1
+    fi
+
+    echo "$warn_days" > /usr/local/mailx_ssl_warn_days.txt
+    log_info "Warning threshold set to $warn_days days"
+
+    # ---- Build the renewal wrapper script ---------------------------------
+    log_info "Creating renewal wrapper: /usr/local/bin/ssl_renewal.sh"
+
+    cat > /usr/local/bin/ssl_renewal.sh <<'RENEWAL_EOF'
+#!/bin/bash
+# ============================================================================
+# MailX SSL Renewal Wrapper
+# - Runs certbot renew
+# - Reloads Postfix/Dovecot/Apache on success
+# - Emails admin on failure (or on near-expiry warning)
+# ============================================================================
+
+ADMIN_EMAIL_FILE="/usr/local/mailx_admin_email.txt"
+WARN_DAYS_FILE="/usr/local/mailx_ssl_warn_days.txt"
+DOMAIN_FILE="/usr/local/roundcube_mail_domain.txt"
+FAIL_LOG="/var/log/mailx/ssl_renewal_failures.log"
+STATE_DIR="/usr/local/mailx_state"
+
+mkdir -p "$(dirname "$FAIL_LOG")" "$STATE_DIR"
+
+ADMIN_EMAIL=$(cat "$ADMIN_EMAIL_FILE" 2>/dev/null | tr -d '[:space:]')
+WARN_DAYS=$(cat "$WARN_DAYS_FILE" 2>/dev/null | tr -d '[:space:]')
+DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null | tr -d '[:space:]')
+WARN_DAYS=${WARN_DAYS:-14}
+HOSTNAME=$(hostname)
+
+log_fail() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$FAIL_LOG"
+}
+
+send_mail() {
+    local subject="$1"
+    local body="$2"
+    if [ -n "$ADMIN_EMAIL" ]; then
+        echo -e "$body" | mail -s "$subject" \
+            -a "From: admin@${DOMAIN:-localhost}" "$ADMIN_EMAIL" 2>/dev/null || true
+    fi
+}
+
+# ---- Step 1: Attempt renewal ----------------------------------------------
+CERTBOT_LOG=$(mktemp)
+if certbot renew --quiet \
+        --deploy-hook "systemctl reload postfix dovecot apache2" \
+        > "$CERTBOT_LOG" 2>&1; then
+    RENEW_RC=0
+else
+    RENEW_RC=$?
+fi
+
+if [ "$RENEW_RC" -ne 0 ]; then
+    # Only alert once per day per failure signature to avoid spam
+    TODAY=$(date +%Y-%m-%d)
+    LAST_ALERT_FILE="$STATE_DIR/ssl_last_fail_alert"
+    LAST_ALERT=$(cat "$LAST_ALERT_FILE" 2>/dev/null)
+    if [ "$LAST_ALERT" != "$TODAY" ]; then
+        echo "$TODAY" > "$LAST_ALERT_FILE"
+        log_fail "certbot renew failed (rc=$RENEW_RC)"
+        send_mail "[$HOSTNAME] SSL renewal FAILED for ${DOMAIN:-unknown}" \
+"===========================================
+SSL RENEWAL FAILURE — ACTION REQUIRED
+===========================================
+
+Server    : $HOSTNAME
+Domain    : ${DOMAIN:-unknown}
+Time      : $(date '+%Y-%m-%d %H:%M:%S')
+Exit code : $RENEW_RC
+
+Certbot output (last 30 lines):
+-------------------------------------------
+$(tail -n 30 "$CERTBOT_LOG")
+-------------------------------------------
+
+WHAT TO DO:
+1. SSH into the server
+2. Run: certbot renew --dry-run
+3. Check: tail -n 50 /var/log/letsencrypt/letsencrypt.log
+4. Common causes:
+   - Port 80 blocked (HTTP-01 challenge fails)
+   - DNS changed / domain no longer points here
+   - Rate limit hit
+   - Webroot path missing
+
+MANUAL RENEWAL:
+   certbot renew --force-renewal
+   systemctl reload postfix dovecot apache2
+
+Failure log: $FAIL_LOG
+==========================================="
+    fi
+    rm -f "$CERTBOT_LOG"
+    exit 1
+fi
+rm -f "$CERTBOT_LOG"
+
+# ---- Step 2: Check remaining lifetime, warn if getting close --------------
+if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    END_DATE=$(openssl x509 -enddate -noout \
+        -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" 2>/dev/null | cut -d= -f2)
+    if [ -n "$END_DATE" ]; then
+        END_EPOCH=$(date -d "$END_DATE" +%s 2>/dev/null)
+        NOW_EPOCH=$(date +%s)
+        DAYS_LEFT=$(( (END_EPOCH - NOW_EPOCH) / 86400 ))
+
+        if [ "$DAYS_LEFT" -lt "$WARN_DAYS" ] && [ "$DAYS_LEFT" -ge 0 ]; then
+            TODAY=$(date +%Y-%m-%d)
+            LAST_WARN_FILE="$STATE_DIR/ssl_last_warn_alert"
+            LAST_WARN=$(cat "$LAST_WARN_FILE" 2>/dev/null)
+            if [ "$LAST_WARN" != "$TODAY" ]; then
+                echo "$TODAY" > "$LAST_WARN_FILE"
+                send_mail "[$HOSTNAME] SSL cert for ${DOMAIN} expires in $DAYS_LEFT days" \
+"===========================================
+SSL CERTIFICATE EXPIRY WARNING
+===========================================
+
+Server     : $HOSTNAME
+Domain     : $DOMAIN
+Expires    : $END_DATE
+Days left  : $DAYS_LEFT (threshold: $WARN_DAYS)
+
+Renewal either failed silently or has not yet run.
+Run the MailX script -> option 16 to inspect,
+or option 17 to force a renewal.
+
+Check certbot:
+   certbot certificates
+   tail -n 50 /var/log/letsencrypt/letsencrypt.log
+==========================================="
+            fi
+        fi
+    fi
+fi
+
+exit 0
+RENEWAL_EOF
+
+    chmod +x /usr/local/bin/ssl_renewal.sh
+    log_info "Renewal wrapper installed"
+
+    # ---- Schedule via cron -------------------------------------------------
+    log_info "Installing cron entry (runs daily at 03:17 + 15:17)..."
+    (
+        crontab -l 2>/dev/null | grep -v "ssl_renewal.sh"
+        echo "17 3 * * * /usr/local/bin/ssl_renewal.sh"
+        echo "17 15 * * * /usr/local/bin/ssl_renewal.sh"
+    ) | crontab - 2>/dev/null || true
+
+    # ---- Also ensure certbot.timer is enabled ------------------------------
+    if systemctl list-unit-files 2>/dev/null | grep -q "^certbot.timer"; then
+        systemctl enable --now certbot.timer 2>/dev/null || true
+        log_info "certbot.timer enabled (systemd-native renewal)"
+    fi
+
+    # ---- Verify -----------------------------------------------------------
+    echo ""
+    log_info "Auto-renewal configuration summary:"
+    echo "  Admin email      : $admin_email"
+    echo "  Warning threshold: $warn_days days"
+    echo "  Wrapper script   : /usr/local/bin/ssl_renewal.sh"
+    echo "  Failure log      : /var/log/mailx/ssl_renewal_failures.log"
+    echo "  Cron entries     : 03:17 and 15:17 daily"
+    echo ""
+
+    if crontab -l 2>/dev/null | grep -q "ssl_renewal.sh"; then
+        echo "  ✓ Cron entries installed:"
+        crontab -l 2>/dev/null | grep "ssl_renewal.sh" | sed 's/^/    /'
+    else
+        echo "  ✗ Failed to install cron entries"
+    fi
+    echo ""
+
+    # ---- Offer a test ------------------------------------------------------
+    read -p "Send a test notification email now? (y/n): " send_test
+    if [[ "$send_test" == "y" ]]; then
+        notify_ssl_failure "TEST notification from configure_ssl_autorenewal at $(date)"
+        log_info "Test notification triggered — check $admin_email"
+    fi
+
+    echo ""
+    log_info "SSL auto-renewal and notifications configured successfully."
+    echo ""
 }
 
 manage_ssl_certificates() {
@@ -1086,7 +1633,7 @@ manage_ssl_certificates() {
 
         renew)
             log_info "Renewing SSL certificates..."
-            certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2" || true
+            certbot renew --quiet --post-hook "systemctl reload  dovecot apache2" || true
             ;;
 
         change)
@@ -1142,9 +1689,9 @@ add_roundcube_user() {
     echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
     chown "$username:$username" "/home/$username/.dovecot.quota"
 
-    # Add to Postfix virtual maps
-    echo "$email $username" >> /etc/postfix/virtual
-    postmap /etc/postfix/virtual
+    # Add to  virtual maps
+    echo "$email $username" >> /etc//virtual
+    postmap /etc//virtual
 
     ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
@@ -1154,7 +1701,7 @@ add_roundcube_user() {
         mysql $ROUNDCUBE_DB_NAME -e "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');" 2>/dev/null || true
     fi
 
-    systemctl restart postfix dovecot 2>/dev/null || true
+    systemctl restart  dovecot 2>/dev/null || true
 
     send_welcome_email "$email" "$username"
 
@@ -1581,7 +2128,7 @@ uninstall_all() {
     echo "=============================================="
     echo ""
     echo "This will COMPLETELY remove all MailX components:"
-    echo "  - Postfix, Dovecot, OpenDKIM (mail services)"
+    echo "  - , Dovecot, OpenDKIM (mail services)"
     echo "  - MySQL Server and all databases"
     echo "  - Apache2 and all virtual hosts"
     echo "  - PHP 5.6, 8.1, 8.3, 8.4 and all extensions"
@@ -1603,7 +2150,7 @@ uninstall_all() {
 
     # ── Step 1: Stop all services ──
     log_info "Stopping all services..."
-    local services="postfix dovecot apache2 mysql opendkim php8.1-fpm php8.3-fpm php8.4-fpm php5.6-fpm certbot.timer"
+    local services=" dovecot apache2 mysql opendkim php8.1-fpm php8.3-fpm php8.4-fpm php5.6-fpm certbot.timer"
     for svc in $services; do
         systemctl stop "$svc" 2>/dev/null || true
         systemctl disable "$svc" 2>/dev/null || true
@@ -1638,7 +2185,7 @@ uninstall_all() {
     export DEBIAN_FRONTEND=noninteractive
 
     apt-get -y remove --purge \
-        postfix postfix-mysql mailutils \
+         -mysql mailutils \
         dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql dovecot-sieve dovecot-managesieved \
         sasl2-bin \
         opendkim opendkim-tools \
@@ -1663,7 +2210,7 @@ uninstall_all() {
 
     # ── Step 8: Remove all configuration directories ──
     log_info "Removing configuration directories..."
-    rm -rf /etc/postfix
+    rm -rf /etc/
     rm -rf /etc/dovecot
     rm -rf /etc/opendkim /etc/opendkim.conf
     rm -rf /etc/apache2
@@ -1675,8 +2222,8 @@ uninstall_all() {
     rm -rf /var/lib/mysql
     rm -rf /var/lib/dovecot
     rm -rf /var/lib/opendkim
-    rm -rf /var/lib/postfix
-    rm -rf /var/spool/postfix
+    rm -rf /var/lib/
+    rm -rf /var/spool/
     rm -rf /var/mail/vmail
     rm -rf /var/run/opendkim
 
@@ -1746,7 +2293,7 @@ uninstall_all() {
     echo "=============================================="
     echo ""
     echo "The following have been removed:"
-    echo "  ✓ Mail services (Postfix, Dovecot, OpenDKIM)"
+    echo "  ✓ Mail services (, Dovecot, OpenDKIM)"
     echo "  ✓ Database (MySQL Server + all data)"
     echo "  ✓ Web server (Apache2 + all vhosts)"
     echo "  ✓ PHP (all versions + extensions)"
@@ -1789,11 +2336,11 @@ change_domain_hostname() {
     echo "$new_hostname" > /etc/mailname
     echo "$new_domain" > /usr/local/roundcube_mail_domain.txt
 
-    sed -i "s/$old_domain/$new_domain/g" /etc/postfix/main.cf 2>/dev/null || true
-    sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/main.cf 2>/dev/null || true
+    sed -i "s/$old_domain/$new_domain/g" /etc//main.cf 2>/dev/null || true
+    sed -i "s/$old_hostname/$new_hostname/g" /etc//main.cf 2>/dev/null || true
 
-    if [ -f "/etc/postfix/header_checks" ]; then
-        sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/header_checks
+    if [ -f "/etc//header_checks" ]; then
+        sed -i "s/$old_hostname/$new_hostname/g" /etc//header_checks
     fi
 
     if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
@@ -1810,7 +2357,7 @@ change_domain_hostname() {
     generate_dkim_key "$new_domain"
     configure_opendkim "$new_domain"
 
-    restart_service postfix
+    restart_service 
     restart_service dovecot
     restart_service apache2
 
@@ -1819,10 +2366,10 @@ change_domain_hostname() {
     log_info "Domain changed successfully to $new_domain with hostname $new_hostname"
 }
 
-repair_postfix_config() {
+repair__config() {
     echo ""
     echo "=============================================="
-    echo "  Postfix Configuration Repair"
+    echo "   Configuration Repair"
     echo "=============================================="
     echo ""
     echo "This will re-download the known-good main.cf and master.cf"
@@ -1847,7 +2394,7 @@ repair_postfix_config() {
    #     return 0
    # fi
 
-    local config_dir="/etc/postfix"
+    local config_dir="/etc/"
 
     # Backup current configs
     local timestamp=$(date +%Y%m%d_%H%M%S)
@@ -1857,7 +2404,7 @@ repair_postfix_config() {
 
     # Download fresh main.cf
     log_info "Downloading main.cf from GitHub..."
-    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/main.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"; then
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/main.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"; then
         if [[ -s "${config_dir}/main.cf.tmp" ]]; then
             mv "${config_dir}/main.cf.tmp" "${config_dir}/main.cf"
             log_info "main.cf downloaded successfully"
@@ -1874,7 +2421,7 @@ repair_postfix_config() {
 
     # Download fresh master.cf
     log_info "Downloading master.cf from GitHub..."
-    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"; then
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
         if [[ -s "${config_dir}/master.cf.tmp" ]]; then
             mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
             log_info "master.cf downloaded successfully"
@@ -1909,7 +2456,7 @@ repair_postfix_config() {
     fi
 
     # Re-apply header checks
-    setup_postfix_header_checks "$host"
+    setup__header_checks "$host"
 
     # Re-apply DKIM milter settings (always apply, so fresh config download doesn't wipe them)
     postconf -e "milter_default_action = accept"
@@ -1927,21 +2474,21 @@ repair_postfix_config() {
     fi
 
     # Validate
-    if postfix check 2>/dev/null; then
-        log_info "Postfix configuration validated successfully"
+    if  check 2>/dev/null; then
+        log_info " configuration validated successfully"
     else
-        log_warning "Postfix configuration check had warnings"
+        log_warning " configuration check had warnings"
     fi
 
-    restart_service postfix
+    restart_service 
 
     echo ""
     echo "=============================================="
-    log_info "Postfix configuration repaired successfully!"
+    log_info " configuration repaired successfully!"
     echo "=============================================="
     echo ""
     echo "Listening ports:"
-    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc/postfix/master.cf 2>/dev/null | awk '{print "  " $1}' || true
+    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc//master.cf 2>/dev/null | awk '{print "  " $1}' || true
     echo ""
     echo "Pre-repair configs backed up as:"
     echo "  main.cf.pre-repair_${timestamp}"
@@ -1949,10 +2496,10 @@ repair_postfix_config() {
     echo ""
 }
 
-set_postfix_custom_port() {
+set__custom_port() {
     echo ""
-    echo "Current Postfix listening ports:"
-    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc/postfix/master.cf 2>/dev/null | awk '{print "  " $1}' || echo "  (unable to read master.cf)"
+    echo "Current  listening ports:"
+    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc//master.cf 2>/dev/null | awk '{print "  " $1}' || echo "  (unable to read master.cf)"
     echo ""
 
     read -p "Enter new SMTP port number to ADD (e.g., 2525, 2580): " new_port
@@ -1963,28 +2510,28 @@ set_postfix_custom_port() {
     fi
 
     # Check if this port is already configured
-    if grep -qE "^${new_port}\s+inet" /etc/postfix/master.cf 2>/dev/null; then
+    if grep -qE "^${new_port}\s+inet" /etc//master.cf 2>/dev/null; then
         log_warning "Port $new_port is already configured in master.cf"
         read -p "Replace existing entry? (y/n): " replace_confirm
         if [[ "$replace_confirm" != "y" ]]; then
             return 0
         fi
         # Remove existing custom port block (port line + following -o lines)
-        sed -i "/^${new_port}\s\+inet/,/^[^[:space:]]/{/^${new_port}\s\+inet/d; /^\s\+-o /d}" /etc/postfix/master.cf
+        sed -i "/^${new_port}\s\+inet/,/^[^[:space:]]/{/^${new_port}\s\+inet/d; /^\s\+-o /d}" /etc//master.cf
     fi
 
     # Backup before modifying
-    cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
+    cp /etc//master.cf /etc//master.cf.bak
 
     # Re-download the clean master.cf from GitHub to restore any previous damage
-    local config_dir="/etc/postfix"
+    local config_dir="/etc/"
     local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
     local hostname=$(hostname)
 
     read -p "Re-download clean master.cf from GitHub? (recommended) (y/n): " redownload
     if [[ "$redownload" == "y" ]]; then
         log_info "Downloading clean master.cf from GitHub..."
-        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"; then
+        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
             if [[ -s "${config_dir}/master.cf.tmp" ]]; then
                 mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
                 # Replace placeholders
@@ -2002,15 +2549,15 @@ set_postfix_custom_port() {
 
     # Add the custom port as an ADDITIONAL listener (keeps existing 25, 587, 465)
     log_info "Adding custom SMTP port $new_port..."
-    cat <<EOF >> /etc/postfix/master.cf
+    cat <<EOF >> /etc//master.cf
 
 # Custom SMTP port $new_port
 ${new_port}      inet  n       -       y       -       -       smtpd
-  -o syslog_name=postfix/smtp-${new_port}
+  -o syslog_name=/smtp-${new_port}
   -o smtpd_tls_security_level=may
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_client_restrictions=permit_sasl_authenticated,reject
-  -o smtpd_sender_login_maps=hash:/etc/postfix/virtual
+  -o smtpd_sender_login_maps=hash:/etc//virtual
   -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
   -o milter_macro_daemon_name=ORIGINATING
 EOF
@@ -2026,17 +2573,17 @@ EOF
     fi
 
     # Validate and restart
-    if postfix check 2>/dev/null; then
-        log_info "Postfix configuration validated"
+    if  check 2>/dev/null; then
+        log_info " configuration validated"
     else
-        log_warning "Postfix configuration check had warnings (non-fatal)"
+        log_warning " configuration check had warnings (non-fatal)"
     fi
 
-    restart_service postfix
+    restart_service 
 
     echo ""
-    echo "Postfix now listening on:"
-    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc/postfix/master.cf 2>/dev/null | awk '{print "  " $1}' || true
+    echo " now listening on:"
+    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc//master.cf 2>/dev/null | awk '{print "  " $1}' || true
     echo ""
     log_info "Custom SMTP port $new_port added successfully"
 }
@@ -2044,8 +2591,8 @@ EOF
 add_domain() {
     local domain=$1
     local domain_file="/usr/local/roundcube_mail_domain.txt"
-    local helo_access_file="/etc/postfix/helo_access"
-    local virtual_domains_file="/etc/postfix/virtual_domains"
+    local helo_access_file="/etc//helo_access"
+    local virtual_domains_file="/etc//virtual_domains"
 
     if check_string_in_file "$domain_file" "$domain"; then
         log_warning "Domain $domain already exists"
@@ -2057,7 +2604,7 @@ add_domain() {
     if [ ! -f "$helo_access_file" ]; then
         touch "$helo_access_file"
         chmod 640 "$helo_access_file"
-        chown root:postfix "$helo_access_file"
+        chown root: "$helo_access_file"
     fi
 
     if ! grep -qF ".$domain OK" "$helo_access_file" 2>/dev/null; then
@@ -2068,7 +2615,7 @@ add_domain() {
     if [ ! -f "$virtual_domains_file" ]; then
         touch "$virtual_domains_file"
         chmod 640 "$virtual_domains_file"
-        chown root:postfix "$virtual_domains_file"
+        chown root: "$virtual_domains_file"
     fi
 
     if ! grep -qF "$domain OK" "$virtual_domains_file" 2>/dev/null; then
@@ -2082,8 +2629,8 @@ add_domain() {
 remove_domain() {
     local domain=$1
     local domain_file="/usr/local/roundcube_mail_domain.txt"
-    local helo_access_file="/etc/postfix/helo_access"
-    local virtual_domains_file="/etc/postfix/virtual_domains"
+    local helo_access_file="/etc//helo_access"
+    local virtual_domains_file="/etc//virtual_domains"
     local temp_file=$(mktemp)
 
     local domain_count=$(wc -l < "$domain_file" | tr -d ' ')
@@ -2127,7 +2674,7 @@ show_installation_status() {
     fi
     echo
     echo "Services status:"
-    for service in apache2 postfix dovecot mysql opendkim; do
+    for service in apache2  dovecot mysql opendkim; do
         if systemctl is-active --quiet "$service" 2>/dev/null; then
             echo "  ✓ $service is running"
         else
@@ -2456,14 +3003,14 @@ EOF
     if ! is_stage_completed "mail_server_installation"; then
         log_info "=== Stage 4: Mail Server Installation ==="
 
-        apt_install postfix mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql
+        apt_install  net-tools mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql swaks
 
         configure_dovecot_quota
         configure_dovecot_sasl
 
-        systemctl restart dovecot postfix 2>/dev/null || true
+        systemctl restart dovecot  2>/dev/null || true
 
-        verify_postfix_dovecot_connection
+        verify__dovecot_connection
         test_sasl_authentication
 
         mark_stage_complete "mail_server_installation"
@@ -2620,26 +3167,26 @@ EOF
         fi
     fi
 
-    # Stage 10: Postfix Configuration
-    if ! is_stage_completed "postfix_configuration"; then
-        log_info "=== Stage 10: Postfix Configuration ==="
+    # Stage 10:  Configuration
+    if ! is_stage_completed "_configuration"; then
+        log_info "=== Stage 10:  Configuration ==="
 
-        update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
-        update_postfix_virtual "$EMAIL_DOMAIN" "admin"
-        setup_postfix_header_checks "$HOSTNAME"
+        update__config "$EMAIL_DOMAIN" "$HOSTNAME"
+        update__virtual "$EMAIL_DOMAIN" "admin"
+        setup__header_checks "$HOSTNAME"
 
         # Validate configuration
-        if postfix check 2>/dev/null; then
-            log_info "Postfix configuration validated successfully"
+        if  check 2>/dev/null; then
+            log_info " configuration validated successfully"
         else
-            log_warning "Postfix configuration check had warnings"
+            log_warning " configuration check had warnings"
         fi
 
-        restart_service postfix
+        restart_service 
 
-        repair_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
+        repair__config "$EMAIL_DOMAIN" "$HOSTNAME"
 
-        mark_stage_complete "postfix_configuration"
+        mark_stage_complete "_configuration"
     fi
 
     # Stage 11: DKIM Generation and Configuration
@@ -2650,7 +3197,7 @@ EOF
         if generate_dkim_key "$EMAIL_DOMAIN"; then
             log_info "DKIM key generated/verified"
 
-            # Configure and start OpenDKIM service, integrate with Postfix
+            # Configure and start OpenDKIM service, integrate with 
             if configure_opendkim "$EMAIL_DOMAIN"; then
                 log_info "OpenDKIM service configured successfully"
 
@@ -2687,7 +3234,7 @@ EOF
     log_info "=== Final: Restarting Services ==="
     systemctl restart opendkim 2>/dev/null || true
     sleep 2
-    systemctl restart apache2 dovecot postfix 2>/dev/null || true
+    systemctl restart apache2 dovecot  2>/dev/null || true
 
     # Send notification email with all details
     if ! is_stage_completed "notification_sent"; then
@@ -2736,10 +3283,13 @@ echo "10. Show Installation Status"
 echo "11. Cleanup State (Reset Installation)"
 echo "12. View DKIM / DNS Records"
 echo "13. Resend DKIM / DNS Records to Email"
-echo "14. Repair Postfix Configuration"
-echo "15. Exit"
+echo "14. Repair  Configuration"
+echo "15. View SSL Certificate Details"
+echo "16. Renew SSL Certificates Now"
+echo "17. Configure SSL Auto-Renewal & Notifications"
+echo "18. Exit"
 
-read -p "Enter your choice (1-15): " choice
+read -p "Enter your choice (1-18): " choice
 
 case $choice in
     1)
@@ -2819,7 +3369,7 @@ case $choice in
         ;;
 
     7)
-        set_postfix_custom_port
+        set__custom_port
         ;;
 
     8)
@@ -2851,10 +3401,21 @@ case $choice in
         ;;
 
     14)
-        repair_postfix_config
+        repair__config
+        ;;
+    15)
+        show_ssl_details
         ;;
 
-    15)
+    16)
+        renew_ssl_now
+        ;;
+
+    17)
+        configure_ssl_autorenewal
+        ;;
+
+    18)
         echo "Exiting."
         exit 0
         ;;
