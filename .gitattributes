@@ -1,0 +1,16 @@
+# The target is Linux (Debian/Ubuntu servers) and the top-level `mailx` script
+# is fetched and executed with
+#   curl -O https://raw.githubusercontent.com/gtmylab/mailx/main/mailx ...
+# so every file here has to keep LF line endings. A CRLF shebang fails with
+# "bad interpreter: /bin/bash^M", and CRLF inside a heredoc corrupts every
+# config file the installer writes.
+* text=auto eol=lf
+
+# Executed as shell scripts on Linux.
+mailx text eol=lf
+xmail text eol=lf
+install.sh text eol=lf
+roundcube.sh text eol=lf
+
+# Templates downloaded by the installer and consumed by Postfix.
+*.cf text eol=lf
